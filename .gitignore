@@ -1,0 +1,57 @@
+# This repository lives inside a Steam game directory of about half a gigabyte.
+# Only the ~3 MB that is actually authored here is tracked: plugin sources,
+# includes, configs and the language file. Everything else - maps, WADs,
+# models, sounds, sprites, compiled plugins, engine binaries - is either
+# shipped by Valve, downloaded from a weapon pack, or a build artifact.
+#
+# The shape below is "ignore everything, then allow back in, one directory
+# level at a time". A directory has to be un-ignored before anything inside it
+# can be, which is why the paths repeat.
+
+# ignore everything at the root
+/*
+
+!/.gitignore
+!/docs/
+
+# --- addons/amxmodx ---------------------------------------------------------
+!/addons/
+/addons/*
+!/addons/amxmodx/
+/addons/amxmodx/*
+!/addons/amxmodx/scripting/
+!/addons/amxmodx/configs/
+!/addons/amxmodx/data/
+
+# sources only, no compiled .amxx and no .orig / .bak / .prev snapshots
+/addons/amxmodx/scripting/*
+!/addons/amxmodx/scripting/*.sma
+!/addons/amxmodx/scripting/include/
+/addons/amxmodx/scripting/include/*
+!/addons/amxmodx/scripting/include/*.inc
+
+/addons/amxmodx/configs/*
+!/addons/amxmodx/configs/*.ini
+!/addons/amxmodx/configs/*.cfg
+
+/addons/amxmodx/data/*
+!/addons/amxmodx/data/lang/
+/addons/amxmodx/data/lang/*
+!/addons/amxmodx/data/lang/*.txt
+
+# --- never, on a public repository ------------------------------------------
+# Both are stock AMX Mod X templates with empty credentials today. They are
+# excluded so that the day someone puts a real admin password or database
+# password in one of them, it does not quietly become public.
+/addons/amxmodx/configs/users.ini
+/addons/amxmodx/configs/sql.cfg
+
+# --- transient --------------------------------------------------------------
+# .prev is the rollback copy kept beside every installed plugin, .bak and
+# .orig are pre-edit snapshots. Git is the history now; these stay on disk but
+# out of the repository.
+*.bak
+*.bak-*
+*.orig
+*.prev
+*.amxx
