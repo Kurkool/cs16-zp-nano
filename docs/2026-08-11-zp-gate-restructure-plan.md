@@ -487,25 +487,22 @@ ScheduleRespawn(victim)
 
 	new Float:delay = get_pcvar_float(g_pRespawnDelay)
 
+	/*
+		Floored, not branched. A delay of zero or less used to call
+		zp_respawn_user() straight from this post hook instead of scheduling a
+		task - the one respawn on this server that left no TASK_RESPAWN behind
+		it, and so the one WillCountAsZombie()'s task_exists() term could not
+		see. Everything goes through a task now, so the predicate has exactly
+		one thing to look for. AMXX clamps set_task below 0.1 anyway, so this
+		floor only makes the existing clamp visible.
+	*/
+	if (delay < 0.1)
+		delay = 0.1
+
 	if (get_pcvar_num(g_pDebug))
 		log_amx("[RULES] killed_post victim=%d permadead=0 -> respawn in %.2fs", victim, delay)
 
-	if (delay <= 0.0)
-	{
-		/*
-			Unused in practice - zp_rules_respawn_delay defaults to 1.0 - and
-			the gate cannot help this path anyway: CheckWinConditions for this
-			death has already run by the time a post hook fires, so a zero
-			delay respawns into a round that may already be over. Left as is
-			rather than removed, because removing a cvar value is a separate
-			decision.
-		*/
-		zp_respawn_user(victim, ZP_TEAM_ZOMBIE)
-	}
-	else
-	{
-		set_task(delay, "Task_Respawn", victim + TASK_RESPAWN)
-	}
+	set_task(delay, "Task_Respawn", victim + TASK_RESPAWN)
 }
 ```
 
