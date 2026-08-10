@@ -117,6 +117,13 @@ new g_pDebug, g_pRespawnSound
 	"f" is the team extermination one. Hold it while any zombie can still
 	return, release it when none can, and CS's own check becomes correct -
 	no cancelled damage, no healing anyone back to full.
+
+	That one flag covers BOTH outcomes of the same check, not just the
+	human-win half - see UpdateRoundEndGate() for why it also has to release
+	the instant no human is left alive. set_pcvar_string() replaces the
+	whole flag string too, not just this bit; harmless today since nothing
+	else on this server drives mp_round_infinite, but worth knowing if that
+	ever changes.
 */
 new g_pRoundInfinite
 
@@ -173,6 +180,17 @@ public plugin_init()
 	RegisterHam(Ham_CS_RoundRespawn, "player", "Fw_RoundRespawn_Pre", 0)
 }
 
+public plugin_end()
+{
+	// leaves mp_round_infinite exactly as ReGameDLL defaults it (no flags
+	// held). Without this, disabling the plugin or rolling back the .amxx
+	// while the gate happens to be "f" bricks round-extermination in BOTH
+	// directions for the rest of the map, with nothing left running to
+	// release it.
+	if (g_pRoundInfinite)
+		set_pcvar_string(g_pRoundInfinite, "0")
+}
+
 public client_putinserver(id)
 {
 	g_bPermaDead[id] = false
@@ -187,6 +205,11 @@ public client_disconnected(id)
 	g_bMeleeHit[id]  = false
 
 	remove_task(id + TASK_RESPAWN)
+
+	// if this player was the last thing keeping the gate held (a pending
+	// respawn for the last zombie), removing their task above just changed
+	// the count and nothing else is coming to notice
+	UpdateRoundEndGate()
 }
 
 public Event_NewRound()
@@ -260,12 +283,39 @@ UpdateRoundEndGate()
 		return
 
 	new n = CountZombiesThatCanReturn()
-	new bool:bHold = (n > 0)
+	new humans = zp_get_human_count()
 
+	/*
+		mp_round_infinite's "f" flag blocks ONE ReGameDLL check that decides
+		BOTH team-extermination outcomes at once
+		(regamedll/dlls/multiplay_gamerules.cpp, TeamExterminationCheck):
+		humans win once zombies hit zero, zombies win once humans hit zero.
+		Holding "f" for as long as a zombie can return - the normal state of
+		a round - correctly protects the human-win half, but on its own it
+		would also block the zombie-win half forever. Both release
+		conditions have to be checked here, or one win path stays wedged
+		shut permanently.
+	*/
+
+	// humans win once no zombie can still return - the condition this gate
+	// was originally written for
+	new bool:bZombiesDone = (n == 0)
+
+	// zombies win once no human is left alive. ZP kills the last human
+	// outright instead of infecting them (zombie_plague40.sma:2130-2132),
+	// specifically so this check has a real death to fire on
+	new bool:bHumansDone = (humans == 0)
+
+	new bool:bHold = !bZombiesDone && !bHumansDone
+
+	// this sets mp_round_infinite's whole flag string, not just the "f" bit -
+	// harmless while nothing else on this server drives its other flags, but
+	// it would stomp them if that ever changes
 	set_pcvar_string(g_pRoundInfinite, bHold ? "f" : "0")
 
 	if (get_pcvar_num(g_pDebug))
-		log_amx("[RULES] gate zombiesThatCanReturn=%d -> mp_round_infinite=%s", n, bHold ? "f" : "0")
+		log_amx("[RULES] gate zombiesThatCanReturn=%d -> mp_round_infinite=%s (humansAlive=%d)",
+			n, bHold ? "f" : "0", humans)
 }
 
 public Fw_TakeDamage_Pre(victim, inflictor, attacker, Float:damage, damagebits)
@@ -296,7 +346,15 @@ public Fw_Killed_Pre(victim, attacker, shouldgib)
 public Fw_Killed_Post(victim, attacker, shouldgib)
 {
 	if (!get_pcvar_num(g_pRespawn))
+	{
+		// this plugin isn't managing respawns at all with the cvar off, but
+		// a real death still just happened and nothing else will ever
+		// recompute the gate for it - without this, Event_NewRound's forced
+		// "f" at round start is never released and no round can end by
+		// extermination in either direction for as long as this stays 0
+		UpdateRoundEndGate()
 		return HAM_IGNORED
+	}
 
 	if (victim < 1 || victim > 32 || !is_user_connected(victim))
 		return HAM_IGNORED
@@ -340,6 +398,10 @@ public Task_Respawn(taskid)
 			log_amx("[RULES] respawn_task victim=%d SKIPPED connected=%d alive=%d permadead=%d",
 				id, is_user_connected(id) ? 1 : 0, is_user_alive(id) ? 1 : 0, g_bPermaDead[id] ? 1 : 0)
 
+		// the task that just fired no longer counts towards
+		// CountZombiesThatCanReturn() either way - recompute or the total
+		// silently drops without the gate ever hearing about it
+		UpdateRoundEndGate()
 		return
 	}
 
@@ -354,7 +416,11 @@ public Task_Respawn(taskid)
 		during this window (it survived from the previous round), so this is
 		a real, observed case, not a hypothetical one. Wait it out instead.
 	*/
-	if (task_exists(ZP_TASK_MAKEZOMBIE))
+	// outside=1: id 3000 belongs to zombie_plague40.sma, not to us, and
+	// task_exists() only searches the calling plugin's own tasks unless
+	// told otherwise (amxmodx.inc:1824). Without this it always reads 0 and
+	// the whole retry branch below never fires.
+	if (task_exists(ZP_TASK_MAKEZOMBIE, 1))
 	{
 		if (get_pcvar_num(g_pDebug))
 			log_amx("[RULES] respawn_task victim=%d SKIPPED zp still picking zombies this round - retry in 0.5s", id)
