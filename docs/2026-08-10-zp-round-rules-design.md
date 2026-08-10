@@ -103,9 +103,24 @@ is permanent.*
 
 "Can come back" means alive, or dead with a respawn still pending. After every
 permadeath the plugin counts both; when the count reaches zero it clears the
-flag and CS's next win check — it runs one per frame — ends the round on its
-own. Nothing needs to force it. The flag goes back on at the start of the next
-round.
+flag and CS ends the round on its own. Nothing needs to force it. The flag goes
+back on at the start of the next round.
+
+**Correction, 2026-08-11.** This section first said CS re-checks "one per
+frame". It does not, and the error mattered. `CheckWinConditions()` has exactly
+three callers in `multiplay_gamerules.cpp` — `DeathNotice` at `:4185`, inside
+`CBasePlayer::Killed`; `ClientDisconnected` at `:3686`; `ChangePlayerTeam` at
+`:5199`. `Think()` never calls it.
+
+So a release is only worth anything if it happens *before* one of those three,
+and releasing from a `Ham_Killed` post hook is already too late for the death
+that triggered it. The recompute has to sit somewhere that runs ahead of
+`:4185` — `Event_DeathMsg` does, because the message is sent at `:4142` in the
+same call.
+
+Nothing caught this earlier because the release path had never run in a live
+round: Task 1 set the cvar by hand, and Task 2 still had the old rescue in
+place.
 
 This does not fight CS's check — it makes the check correct. While a zombie is
 still coming back the team is not really gone, so CS should not act; once every

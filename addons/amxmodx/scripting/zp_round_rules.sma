@@ -82,6 +82,17 @@
 */
 #define ZP_TASK_MAKEZOMBIE 3000
 
+/*
+	Safety cap on the retry loop in Task_Respawn. zombie_plague40.sma's own
+	window (2.0 + zp_delay seconds - zp_delay is 22 on this server right
+	now, see zombieplague.cfg) is comfortably under half of this. The only
+	way to actually hit the cap is make_zombie_task itself stuck retrying
+	because no player is alive at all (zombie_plague40.sma:5033-5037), which
+	this plugin cannot fix either way - giving up and respawning anyway
+	beats leaving the player stuck dead for the rest of the round.
+*/
+#define MAX_MAKEZOMBIE_RETRIES 120
+
 new const SND_KILL_NORMAL[]   = "cscf/kill_normal.wav"
 new const SND_KILL_HEADSHOT[] = "cscf/kill_headshot.wav"
 
@@ -104,6 +115,10 @@ new bool:g_bWasZombie[33]
 // so that Event_DeathMsg, which only sees a headshot flag, can still tell a
 // melee kill from a shot.
 new bool:g_bMeleeHit[33]
+
+// consecutive Task_Respawn attempts blocked by ZP_TASK_MAKEZOMBIE still
+// being pending, see MAX_MAKEZOMBIE_RETRIES
+new g_iMakeZombieRetries[33]
 
 new g_pEnabled, g_pAnnounce, g_pKillSound, g_pRespawn, g_pRespawnDelay
 new g_pDebug, g_pRespawnSound
@@ -196,6 +211,7 @@ public client_putinserver(id)
 	g_bPermaDead[id] = false
 	g_bWasZombie[id] = false
 	g_bMeleeHit[id]  = false
+	g_iMakeZombieRetries[id] = 0
 }
 
 public client_disconnected(id)
@@ -203,6 +219,7 @@ public client_disconnected(id)
 	g_bPermaDead[id] = false
 	g_bWasZombie[id] = false
 	g_bMeleeHit[id]  = false
+	g_iMakeZombieRetries[id] = 0
 
 	remove_task(id + TASK_RESPAWN)
 
@@ -277,12 +294,17 @@ CountZombiesThatCanReturn()
 	return n
 }
 
-UpdateRoundEndGate()
+/*
+	extraZombiesAboutToReturn: see the call from Event_DeathMsg, which needs
+	to count a zombie that has died but has no TASK_RESPAWN yet. Every other
+	call site leaves this at 0, so n is exactly CountZombiesThatCanReturn().
+*/
+UpdateRoundEndGate(extraZombiesAboutToReturn = 0)
 {
 	if (!g_pRoundInfinite)
 		return
 
-	new n = CountZombiesThatCanReturn()
+	new n = CountZombiesThatCanReturn() + extraZombiesAboutToReturn
 	new humans = zp_get_human_count()
 
 	/*
@@ -301,9 +323,30 @@ UpdateRoundEndGate()
 	// was originally written for
 	new bool:bZombiesDone = (n == 0)
 
-	// zombies win once no human is left alive. ZP kills the last human
-	// outright instead of infecting them (zombie_plague40.sma:2130-2132),
-	// specifically so this check has a real death to fire on
+	/*
+		zombies win once no human is left alive. ZP kills the last human
+		outright instead of infecting them (zombie_plague40.sma:2130-2132),
+		specifically so this check has a real death to fire on.
+
+		NOT modelled, on purpose: a human can come back from the dead the
+		same way a zombie does. zp_respawn_on_worldspawn_kill
+		(zombieplague.cfg:18, on by default) arms respawn_player_check_task
+		2s after every spawn (zombie_plague40.sma:1790-1792) and force-
+		respawns the player if they are still not alive then - despite the
+		cvar's name this fires on death by any cause in that 2s window, not
+		just world damage. A task_exists() guard like
+		CountZombiesThatCanReturn()'s cannot cover it safely: the id it
+		would need, id+TASK_SPAWN, is reused by at least six unrelated
+		set_task calls in zombie_plague40.sma (task_hide_money,
+		respawn_player_check_task, show_menu_buy1 x2, bot_buy_extras,
+		remove_spawn_protection, respawn_player_task), so task_exists() on
+		it is true most of the time for reasons that have nothing to do with
+		a pending human respawn - confirmed by grep, not assumed. Guarding
+		on it would wedge this flag far more often than the narrow gap it
+		would close. Left open: the window is a fixed 2s, and it takes the
+		last human dying inside it AND CS's win check landing in that same
+		2s (another death, a disconnect, or a team change) to matter.
+	*/
 	new bool:bHumansDone = (humans == 0)
 
 	new bool:bHold = !bZombiesDone && !bHumansDone
@@ -398,9 +441,16 @@ public Task_Respawn(taskid)
 			log_amx("[RULES] respawn_task victim=%d SKIPPED connected=%d alive=%d permadead=%d",
 				id, is_user_connected(id) ? 1 : 0, is_user_alive(id) ? 1 : 0, g_bPermaDead[id] ? 1 : 0)
 
-		// the task that just fired no longer counts towards
-		// CountZombiesThatCanReturn() either way - recompute or the total
-		// silently drops without the gate ever hearing about it
+		/*
+			AMXX only frees a one-shot task after its callback returns, so
+			task_exists(taskid) - and therefore
+			CountZombiesThatCanReturn()'s count for this id - still matches
+			THIS invocation until this function is done. Remove it
+			explicitly before recomputing, or the count reads one too high
+			and the gate stays held in exactly the case this recompute was
+			added for.
+		*/
+		remove_task(taskid)
 		UpdateRoundEndGate()
 		return
 	}
@@ -422,12 +472,23 @@ public Task_Respawn(taskid)
 	// the whole retry branch below never fires.
 	if (task_exists(ZP_TASK_MAKEZOMBIE, 1))
 	{
-		if (get_pcvar_num(g_pDebug))
-			log_amx("[RULES] respawn_task victim=%d SKIPPED zp still picking zombies this round - retry in 0.5s", id)
+		g_iMakeZombieRetries[id]++
 
-		set_task(0.5, "Task_Respawn", taskid)
-		return
+		if (g_iMakeZombieRetries[id] <= MAX_MAKEZOMBIE_RETRIES)
+		{
+			if (get_pcvar_num(g_pDebug))
+				log_amx("[RULES] respawn_task victim=%d SKIPPED zp still picking zombies this round - retry in 0.5s (%d/%d)",
+					id, g_iMakeZombieRetries[id], MAX_MAKEZOMBIE_RETRIES)
+
+			set_task(0.5, "Task_Respawn", taskid)
+			return
+		}
+
+		log_amx("[RULES] respawn_task victim=%d gave up waiting on zp after %d retries - respawning anyway, may hold a gun",
+			id, g_iMakeZombieRetries[id])
 	}
+
+	g_iMakeZombieRetries[id] = 0
 
 	if (get_pcvar_num(g_pDebug))
 		log_amx("[RULES] respawn_task victim=%d -> respawning as zombie", id)
@@ -488,39 +549,67 @@ public Event_DeathMsg()
 	new killer = read_data(1)
 	new victim = read_data(2)
 
-	if (victim < 1 || victim > 32 || killer < 1 || killer > 32 || killer == victim)
+	if (victim < 1 || victim > 32)
 		return
 
-	if (!is_user_connected(killer))
-		return
+	new bool:bWasZombieVictim = g_bWasZombie[victim]
 
-	// only a human killing a zombie counts
-	if (!g_bWasZombie[victim] || zp_get_user_zombie(killer))
-		return
-
-	// read_data(3) is the headshot flag and is deliberately ignored - the
-	// permakill follows the melee flag cached during TakeDamage instead
-	new bool:bPermaKill = g_bMeleeHit[victim]
-
-	if (get_pcvar_num(g_pDebug))
-		log_amx("[RULES] deathmsg victim=%d killer=%d meleeFlag=%d csHeadshotFlag=%d -> permakill=%d",
-			victim, killer, bPermaKill ? 1 : 0, read_data(3), (bPermaKill && get_pcvar_num(g_pEnabled)) ? 1 : 0)
-
-	if (bPermaKill && get_pcvar_num(g_pEnabled))
+	// only a human killing a zombie earns permadeath / the announce / the
+	// special kill sound - unchanged from before, just folded into one
+	// condition so the gate recompute below still runs on every other exit
+	if (killer >= 1 && killer <= 32 && killer != victim && is_user_connected(killer)
+	    && bWasZombieVictim && !zp_get_user_zombie(killer))
 	{
-		g_bPermaDead[victim] = true
+		// read_data(3) is the headshot flag and is deliberately ignored -
+		// the permakill follows the melee flag cached during TakeDamage
+		// instead
+		new bool:bPermaKill = g_bMeleeHit[victim]
 
-		if (get_pcvar_num(g_pAnnounce))
+		if (get_pcvar_num(g_pDebug))
+			log_amx("[RULES] deathmsg victim=%d killer=%d meleeFlag=%d csHeadshotFlag=%d -> permakill=%d",
+				victim, killer, bPermaKill ? 1 : 0, read_data(3), (bPermaKill && get_pcvar_num(g_pEnabled)) ? 1 : 0)
+
+		if (bPermaKill && get_pcvar_num(g_pEnabled))
 		{
-			new szKiller[32], szVictim[32]
-			get_user_name(killer, szKiller, charsmax(szKiller))
-			get_user_name(victim, szVictim, charsmax(szVictim))
-			client_print(0, print_chat, "[ZP] %s finished %s with melee - no respawn this round.", szKiller, szVictim)
+			g_bPermaDead[victim] = true
+
+			if (get_pcvar_num(g_pAnnounce))
+			{
+				new szKiller[32], szVictim[32]
+				get_user_name(killer, szKiller, charsmax(szKiller))
+				get_user_name(victim, szVictim, charsmax(szVictim))
+				client_print(0, print_chat, "[ZP] %s finished %s with melee - no respawn this round.", szKiller, szVictim)
+			}
 		}
+
+		if (get_pcvar_num(g_pKillSound))
+			PlayKillSound(killer, bPermaKill ? SND_KILL_HEADSHOT : SND_KILL_NORMAL)
 	}
 
-	if (get_pcvar_num(g_pKillSound))
-		PlayKillSound(killer, bPermaKill ? SND_KILL_HEADSHOT : SND_KILL_NORMAL)
+	/*
+		Recompute the gate here, not only in Fw_Killed_Post - CS's ONLY win
+		check for this death has already run by the time a Ham_Killed POST
+		hook fires. CheckWinConditions() has exactly three callers in
+		multiplay_gamerules.cpp: DeathNotice (:4185, inside
+		CBasePlayer::Killed, right after SendDeathMessage at :4142),
+		ClientDisconnected (:3686) and ChangePlayerTeam (:5199). Think()
+		never calls it. So a post hook on Killed is always one check late,
+		and if this was the last relevant death, nothing else is coming to
+		trigger another one - the round would just hang instead of ending.
+		DeathMsg is sent from inside that same DeathNotice call, ahead of
+		the check, so recomputing here lands in time.
+
+		Trap: at this point ZP has already cleared g_isalive[victim]
+		(zombie_plague40.sma:1137 -> :1952) but our own Fw_Killed_Post has
+		not run yet, so no TASK_RESPAWN exists for them. A zombie that is
+		about to be rescheduled would read as gone from both
+		zp_get_zombie_count() and CountZombiesThatCanReturn() and release
+		the flag one death early - the same bug this gate exists to
+		prevent, just moved earlier. g_bPermaDead[victim] is final for this
+		death by this line (set above if it's going to be set at all), so
+		it is what decides whether to count them as still coming back.
+	*/
+	UpdateRoundEndGate((bWasZombieVictim && !g_bPermaDead[victim]) ? 1 : 0)
 }
 
 public Fw_RoundRespawn_Pre(id)
