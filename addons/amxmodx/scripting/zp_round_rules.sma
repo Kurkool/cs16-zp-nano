@@ -69,6 +69,19 @@
 
 #define TASK_RESPAWN 8100
 
+/*
+	zombie_plague40.sma's own task id for picking this round's zombies.
+	enum (+= 100) { TASK_MODEL = 2000, TASK_TEAM, TASK_SPAWN, TASK_BLOOD,
+	TASK_AURA, TASK_BURN, TASK_NVISION, TASK_FLASH, TASK_CHARGE,
+	TASK_SHOWHUD, TASK_MAKEZOMBIE, ... } at zombie_plague40.sma:86-103 puts
+	it 11th, so 2000 + 10*100 = 3000. zombieplague.inc does not export it,
+	but zombie_plague40.sma itself gates on task_exists(TASK_MAKEZOMBIE) at
+	line 7524 for the same reason we need it here, so it is a real signal,
+	just an unexported one. Re-derive this if zombie_plague40.sma is ever
+	recompiled with a different task enum.
+*/
+#define ZP_TASK_MAKEZOMBIE 3000
+
 new const SND_KILL_NORMAL[]   = "cscf/kill_normal.wav"
 new const SND_KILL_HEADSHOT[] = "cscf/kill_headshot.wav"
 
@@ -327,6 +340,26 @@ public Task_Respawn(taskid)
 			log_amx("[RULES] respawn_task victim=%d SKIPPED connected=%d alive=%d permadead=%d",
 				id, is_user_connected(id) ? 1 : 0, is_user_alive(id) ? 1 : 0, g_bPermaDead[id] ? 1 : 0)
 
+		return
+	}
+
+	/*
+		zombie_plague40.sma has not picked this round's zombies yet (its own
+		g_newround is still true - zombie_plague40.sma:1543-5040) whenever
+		TASK_MAKEZOMBIE is still pending. Its fw_PlayerSpawn_Post
+		(zombie_plague40.sma:1795) only calls zombieme() when
+		g_respawn_as_zombie[id] && !g_newround, so spawning into this window
+		falls through to the human path and skips the weapon strip - a
+		zombie holding a gun. A zombie can still be alive and get killed
+		during this window (it survived from the previous round), so this is
+		a real, observed case, not a hypothetical one. Wait it out instead.
+	*/
+	if (task_exists(ZP_TASK_MAKEZOMBIE))
+	{
+		if (get_pcvar_num(g_pDebug))
+			log_amx("[RULES] respawn_task victim=%d SKIPPED zp still picking zombies this round - retry in 0.5s", id)
+
+		set_task(0.5, "Task_Respawn", taskid)
 		return
 	}
 
