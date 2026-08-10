@@ -1,8 +1,8 @@
 /*
-	[ZP] Melee Permadeath + Kill Feedback + Endless Respawn
-	-------------------------------------------------------
-	The file is still called headshot_permadeath for the sake of everything
-	that references it, but the trigger is MELEE now, not the head.
+	[ZP] Round Rules - Melee Permadeath + Kill Feedback + Endless Respawn
+	-----------------------------------------------------------------
+	This is zp_round_rules.sma, registered in-game as "[ZP] Round Rules".
+	The trigger for permadeath is MELEE, not the head.
 
 	1. Permadeath - a zombie killed by MELEE stays down for the rest of the
 	   round. Anything else comes straight back, headshots included.
@@ -59,7 +59,6 @@
 
 	cvars:
 		zp_rules_permadeath           1 = melee kills stick for the round
-		                           (name kept so the existing cfg still works)
 		zp_rules_announce  1 = chat line on a permanent kill
 		zp_rules_kill_sound              1 = play the kill feedback sound
 		zp_rules_respawn         1 = take respawn over from ZP
@@ -71,10 +70,6 @@
 #include <fakemeta>
 #include <hamsandwich>
 #include <zombieplague>
-
-#define PLUGIN  "[ZP] Headshot Permadeath"
-#define VERSION "1.3"
-#define AUTHOR  "setup"
 
 #define MAX_SPAWNS 64
 #define TASK_RESPAWN 8100
