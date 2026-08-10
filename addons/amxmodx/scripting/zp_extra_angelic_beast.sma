@@ -35,11 +35,10 @@
 	    rather than being cut off. Original kept as v_angelic.mdl.orig.
 
 	Load order
-	    This plugin MUST load before zp_headshot_permadeath. Its damage
-	    multiplier runs in a Ham_TakeDamage hook, and the last-zombie check in
-	    that plugin reads the damage value - if this one registers later it
-	    sees the raw number, decides the shot is not lethal, and the round ends
-	    on a body shot.
+	    No longer constrained. zp_round_rules used to read the damage value
+	    to decide whether a lethal hit was allowed to land, so anything with
+	    a damage multiplier had to load first. It no longer inspects damage
+	    at all.
 
 	Ownership follows the same rule as every other weapon on this server:
 	lost on infection, connect, disconnect and drop - kept across rounds.
@@ -799,9 +798,10 @@ Stab(id, ent)
 		blood at the impact point, TraceBleed splatters the surface behind
 		it, and m_LastHitGroup is what separates head from body. Calling
 		TakeDamage on its own took health off and produced nothing else - no
-		blood, no reaction - and left zp_headshot_permadeath reading the
-		hitgroup of whatever bullet happened to land last, so whether a
-		lethal stab counted as a headshot was down to the previous shot.
+		blood, no reaction - and left zp_round_rules (headshot-triggered,
+		before its melee rewrite) reading the hitgroup of whatever bullet
+		happened to land last, so whether a lethal stab counted as a
+		headshot was down to the previous shot.
 
 		TraceAttack also queues its damage into the engine's multidamage
 		accumulator, which nothing here flushes. That is harmless: every
@@ -821,7 +821,7 @@ Stab(id, ent)
 
 		DMG_CLUB is what marks this as a melee hit rather than a shot, and it
 		is already the convention on this server - zp_weapon_ak47_beast tags
-		its own stab exactly this way. zp_headshot_permadeath reads the bit to
+		its own stab exactly this way. zp_round_rules reads the bit to
 		decide whether a kill was a melee kill.
 
 		Nothing is lost by dropping DMG_BULLET here. ZP's TakeDamage hook does

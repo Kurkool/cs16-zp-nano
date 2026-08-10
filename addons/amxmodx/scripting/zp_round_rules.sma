@@ -20,32 +20,29 @@
 	   together.
 
 	3. Endless respawn - non-melee deaths respawn after zp_rules_respawn_delay
-	   seconds, with no window where the zombie team is empty.
+	   seconds. The zombie team can be empty for that whole window; the round
+	   simply does not react to it (see the gate below).
 
 	Why respawn is handled here instead of by zp_deathmatch:
 	    ZP respawns on a timer, so for zp_spawn_delay seconds the zombie team
 	    is empty and CS hands the round to the humans. Shooting the last
 	    zombie in the leg used to win the round outright.
 
-	    Respawning in Ham_Killed post is still too late - CS runs its win
-	    check inside CBasePlayer::Killed, before any post hook. So the LAST
-	    zombie is caught earlier, in Ham_TakeDamage: a lethal non-melee hit
-	    is cancelled and turned into a heal + teleport, so the zombie never
-	    dies and there is nothing for CS to react to.
+	    That used to be worked around by cancelling the lethal hit on the
+	    last zombie in Ham_TakeDamage, because CS runs its win check inside
+	    CBasePlayer::Killed, before any post hook could get a respawn in. The
+	    last zombie is not a special case any more: every lethal hit kills,
+	    full stop, and the zombie team can genuinely sit at zero for up to
+	    zp_rules_respawn_delay seconds while a respawn is pending. What makes
+	    that safe is g_pRoundInfinite - UpdateRoundEndGate() holds CS's own
+	    team-extermination check off for as long as anyone can still come
+	    back, and releases it the instant nothing more can.
 
-	    This is why the delay in point 3 is safe. It only ever runs while two
-	    or more zombies were alive at the moment of the killing blow, so at
-	    least one is still standing while the dead one waits; and if that one
-	    is then killed it becomes the last zombie and gets rescued instead of
-	    dying. The team cannot empty out during the wait.
-
-	    Round win by headshot is gone as a side effect: a lethal headshot on
-	    the last zombie is now a non-melee hit, so it gets cancelled like any
-	    other. The last zombie has to be finished with melee.
-
-	    While two or more zombies are alive a normal death is harmless, so it
-	    is allowed to happen for real - the kill counts, the frag counts, and
-	    Ham_Killed post puts the player back immediately.
+	    Round win by headshot is still gone, for the same reason it always
+	    was: a lethal headshot is a non-melee hit, so Fw_Killed_Post schedules
+	    a respawn for it and the gate stays held even when it was the last
+	    zombie standing. Only melee, via permadeath, skips the respawn and
+	    lets the gate - and the round - close.
 
 	Known limitation - do not spend time on this again:
 	    The headshot cue on the kill that ENDS the round is never heard.
@@ -63,7 +60,6 @@
 		zp_rules_kill_sound              1 = play the kill feedback sound
 		zp_rules_respawn         1 = take respawn over from ZP
 		zp_rules_respawn_delay   seconds before a normal death comes back
-		zp_rules_escape_credit      1 = frag + kill feed when the last zombie escapes
 */
 
 #include <amxmodx>
@@ -71,7 +67,6 @@
 #include <hamsandwich>
 #include <zombieplague>
 
-#define MAX_SPAWNS 64
 #define TASK_RESPAWN 8100
 
 new const SND_KILL_NORMAL[]   = "cscf/kill_normal.wav"
@@ -97,12 +92,20 @@ new bool:g_bWasZombie[33]
 // melee kill from a shot.
 new bool:g_bMeleeHit[33]
 
-new g_pEnabled, g_pAnnounce, g_pKillSound, g_pRespawn, g_pCredit, g_pRespawnDelay
+new g_pEnabled, g_pAnnounce, g_pKillSound, g_pRespawn, g_pRespawnDelay
 new g_pDebug, g_pRespawnSound
-new bool:g_bFakeDeath
 
-new Float:g_fSpawn[MAX_SPAWNS][3]
-new g_iSpawns
+/*
+	CS ends the round the moment a team has nobody alive. That is right when
+	the team is gone for good and wrong while someone is still on their way
+	back, and CS cannot tell the difference.
+
+	ReGameDLL can. mp_round_infinite takes one flag per round-end check and
+	"f" is the team extermination one. Hold it while any zombie can still
+	return, release it when none can, and CS's own check becomes correct -
+	no cancelled damage, no healing anyone back to full.
+*/
+new g_pRoundInfinite
 
 public plugin_precache()
 {
@@ -123,12 +126,12 @@ public plugin_init()
 	g_pAnnounce  = register_cvar("zp_rules_announce", "1")
 	g_pKillSound = register_cvar("zp_rules_kill_sound", "1")
 	g_pRespawn   = register_cvar("zp_rules_respawn", "1")
-	g_pCredit    = register_cvar("zp_rules_escape_credit", "1")
 
 	/*
-		A normal death used to come straight back on the same frame. It no
-		longer has to: the last zombie is rescued in TakeDamage rather than
-		respawned, so a wait here can never leave the zombie team empty.
+		A normal death used to come straight back on the same frame because
+		the last zombie was never allowed to actually die. Now every death is
+		real and this can leave the zombie team empty for the whole delay -
+		see g_pRoundInfinite, which is what makes that safe.
 	*/
 	g_pRespawnDelay = register_cvar("zp_rules_respawn_delay", "1.0")
 
@@ -142,6 +145,11 @@ public plugin_init()
 	// heard by everyone, same as ZP's own infection cue. Turn it off if a
 	// busy round starts sounding like a siren.
 	g_pRespawnSound = register_cvar("zp_rules_respawn_sound", "1")
+
+	g_pRoundInfinite = get_cvar_pointer("mp_round_infinite")
+
+	if (!g_pRoundInfinite)
+		log_amx("[RULES] mp_round_infinite not found - ReGameDLL is not loaded, the round-end gate is OFF")
 
 	register_event("HLTV", "Event_NewRound", "a", "1=0", "2=0")
 	register_event("DeathMsg", "Event_DeathMsg", "a")
@@ -180,7 +188,10 @@ public Event_NewRound()
 		remove_task(i + TASK_RESPAWN)
 	}
 
-	CollectSpawns()
+	// a fresh round always starts held; zombies have not been picked yet, so
+	// the count would read zero and open the gate at exactly the wrong time
+	if (g_pRoundInfinite)
+		set_pcvar_string(g_pRoundInfinite, "f")
 }
 
 public zp_round_started(gamemode, id)
@@ -211,69 +222,54 @@ bool:IsMeleeHit(attacker, damagebits)
 	return false
 }
 
+/*
+	Can any zombie still come back? Alive counts, and so does dead with a
+	respawn already scheduled. Tasks are asked directly rather than kept in a
+	counter, because a counter is one missed decrement away from wedging the
+	round open forever.
+*/
+CountZombiesThatCanReturn()
+{
+	new n = zp_get_zombie_count()
+
+	for (new i = 1; i <= 32; i++)
+	{
+		if (task_exists(i + TASK_RESPAWN))
+			n++
+	}
+
+	return n
+}
+
+UpdateRoundEndGate()
+{
+	if (!g_pRoundInfinite)
+		return
+
+	new n = CountZombiesThatCanReturn()
+	new bool:bHold = (n > 0)
+
+	set_pcvar_string(g_pRoundInfinite, bHold ? "f" : "0")
+
+	if (get_pcvar_num(g_pDebug))
+		log_amx("[RULES] gate zombiesThatCanReturn=%d -> mp_round_infinite=%s", n, bHold ? "f" : "0")
+}
+
 public Fw_TakeDamage_Pre(victim, inflictor, attacker, Float:damage, damagebits)
 {
-	// cached ahead of every early exit below, because Event_DeathMsg needs
-	// it and only ever sees a headshot flag of its own
+	/*
+		All this hook does now is remember how the blow landed, because
+		Event_DeathMsg only ever sees a headshot flag of its own and cannot
+		tell a stab from a shot.
+
+		It used to decide whether the victim was allowed to die. It no longer
+		has to: mp_round_infinite keeps CS from reacting to an empty zombie
+		team, so a lethal hit on the last zombie is just a lethal hit.
+	*/
 	if (1 <= victim <= 32)
 		g_bMeleeHit[victim] = IsMeleeHit(attacker, damagebits)
 
-	if (!get_pcvar_num(g_pRespawn))
-		return HAM_IGNORED
-
-	if (victim < 1 || victim > 32 || !is_user_alive(victim))
-		return HAM_IGNORED
-
-	if (!zp_get_user_zombie(victim))
-		return HAM_IGNORED
-
-	new Float:hp
-	pev(victim, pev_health, hp)
-
-	if (damage < hp)
-		return HAM_IGNORED
-
-	new bool:bHumanAttacker = (attacker >= 1 && attacker <= 32 && is_user_connected(attacker)
-	                           && attacker != victim && !zp_get_user_zombie(attacker))
-
-	// only lethal hits get here, so this is a handful of lines per round
-	if (get_pcvar_num(g_pDebug))
-		log_amx("[RULES] lethal victim=%d attacker=%d dmg=%.0f hp=%.0f melee=%d bits=%d humanAtk=%d zombiesAlive=%d",
-			victim, attacker, damage, hp, g_bMeleeHit[victim] ? 1 : 0, damagebits,
-			bHumanAttacker ? 1 : 0, zp_get_zombie_count())
-
-	// a melee kill from a human is meant to be lethal - that is the permakill
-	if (g_bMeleeHit[victim] && bHumanAttacker && get_pcvar_num(g_pEnabled))
-	{
-		if (get_pcvar_num(g_pDebug))
-			log_amx("[RULES]   -> allowed to die as a PERMAKILL")
-
-		return HAM_IGNORED
-	}
-
-	// other zombies still standing, so a real death cannot end the round
-	if (zp_get_zombie_count() > 1)
-		return HAM_IGNORED
-
-	// last zombie, not a melee hit: cancel the death entirely
-	if (get_pcvar_num(g_pDebug))
-		log_amx("[RULES]   -> LAST ZOMBIE rescued, damage cancelled, healed in place")
-
-	RespawnZombie(victim)
-
-	if (bHumanAttacker)
-	{
-		// no real death happened, so the frag and the kill feed line have to
-		// be produced by hand - otherwise a clean shot feels like it missed
-		if (get_pcvar_num(g_pCredit))
-			CreditEscapeKill(attacker, victim)
-
-		if (get_pcvar_num(g_pKillSound))
-			PlayKillSound(attacker, SND_KILL_NORMAL)
-	}
-
-	SetHamParamFloat(4, 0.0)
-	return HAM_SUPERCEDE
+	return HAM_IGNORED
 }
 
 public Fw_Killed_Pre(victim, attacker, shouldgib)
@@ -299,6 +295,7 @@ public Fw_Killed_Post(victim, attacker, shouldgib)
 		if (get_pcvar_num(g_pDebug))
 			log_amx("[RULES] killed_post victim=%d permadead=1 -> NO respawn, stays down", victim)
 
+		UpdateRoundEndGate()
 		return HAM_IGNORED
 	}
 
@@ -314,6 +311,7 @@ public Fw_Killed_Post(victim, attacker, shouldgib)
 	else
 		set_task(delay, "Task_Respawn", victim + TASK_RESPAWN)
 
+	UpdateRoundEndGate()
 	return HAM_IGNORED
 }
 
@@ -338,6 +336,8 @@ public Task_Respawn(taskid)
 	zp_respawn_user(id, ZP_TEAM_ZOMBIE)
 	ClearScoreboardDeath(id)
 	PlayRespawnSound()
+
+	UpdateRoundEndGate()
 }
 
 /*
@@ -386,11 +386,6 @@ ClearScoreboardDeath(id)
 
 public Event_DeathMsg()
 {
-	// skip the kill-feed line we fake ourselves for an escaped last zombie,
-	// otherwise the feedback sound would fire twice
-	if (g_bFakeDeath)
-		return
-
 	new killer = read_data(1)
 	new victim = read_data(2)
 
@@ -441,60 +436,6 @@ public Fw_RoundRespawn_Pre(id)
 }
 
 /*
-	The last zombie never actually dies, so CS produces no frag and no kill
-	feed entry. Both are recreated here: a frag bump plus a hand-built
-	DeathMsg, guarded so our own DeathMsg handler skips it.
-*/
-CreditEscapeKill(killer, victim)
-{
-	new Float:fFrags
-	pev(killer, pev_frags, fFrags)
-	set_pev(killer, pev_frags, fFrags + 1.0)
-
-	new szWeapon[32], szShort[32]
-	get_weaponname(get_user_weapon(killer), szWeapon, charsmax(szWeapon))
-
-	// "weapon_ak47" -> "ak47", which is what DeathMsg expects
-	if (equal(szWeapon, "weapon_", 7))
-		copy(szShort, charsmax(szShort), szWeapon[7])
-	else
-		copy(szShort, charsmax(szShort), szWeapon)
-
-	g_bFakeDeath = true
-
-	message_begin(MSG_BROADCAST, get_user_msgid("DeathMsg"))
-	write_byte(killer)
-	write_byte(victim)
-	write_byte(0)          // not a headshot - this path is never a melee kill,
-	                       // and a melee kill would have been allowed to land
-	write_string(szShort)
-	message_end()
-
-	g_bFakeDeath = false
-
-	/*
-		The fake DeathMsg above is what puts the skull next to the victim on
-		the scoreboard, and this is the one path where no real death and no
-		real respawn ever follow to take it off again - the zombie was healed
-		in place instead. Clear it here, right next to the line that caused
-		it.
-
-		This whole function goes away once mp_round_infinite blocks the team
-		extermination check and the last zombie is simply allowed to die.
-	*/
-	ClearScoreboardDeath(victim)
-
-	// push the new score out so the scoreboard does not lag behind
-	message_begin(MSG_BROADCAST, get_user_msgid("ScoreInfo"))
-	write_byte(killer)
-	write_short(get_user_frags(killer))
-	write_short(get_user_deaths(killer))
-	write_short(0)
-	write_short(get_user_team(killer))
-	message_end()
-}
-
-/*
 	spk rather than emit_sound: emit_sound ties the sound to a player entity
 	and one of its channels, so anything else on that channel replaces it and
 	a round flip tears the whole set down. spk plays straight on the client,
@@ -506,47 +447,4 @@ PlayKillSound(id, const sound[])
 		return
 
 	client_cmd(id, "spk ^"%s^"", sound)
-}
-
-RespawnZombie(id)
-{
-	new hp = zp_get_zombie_maxhealth(id)
-
-	if (hp < 1)
-		hp = 1000
-
-	set_pev(id, pev_health, float(hp))
-
-	if (g_iSpawns > 0)
-	{
-		new i = random_num(0, g_iSpawns - 1)
-		engfunc(EngFunc_SetOrigin, id, g_fSpawn[i])
-		set_pev(id, pev_velocity, Float:{0.0, 0.0, 0.0})
-	}
-}
-
-CollectSpawns()
-{
-	g_iSpawns = 0
-
-	new ent, Float:o[3]
-	new const szClasses[2][] = { "info_player_deathmatch", "info_player_start" }
-
-	for (new c = 0; c < 2; c++)
-	{
-		ent = -1
-
-		while ((ent = engfunc(EngFunc_FindEntityByString, ent, "classname", szClasses[c])) > 0)
-		{
-			if (g_iSpawns >= MAX_SPAWNS)
-				return
-
-			pev(ent, pev_origin, o)
-
-			g_fSpawn[g_iSpawns][0] = o[0]
-			g_fSpawn[g_iSpawns][1] = o[1]
-			g_fSpawn[g_iSpawns][2] = o[2]
-			g_iSpawns++
-		}
-	}
 }
