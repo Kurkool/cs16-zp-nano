@@ -1,7 +1,13 @@
 # Design — own the round rules instead of working around CS
 
 Zombie Plague server, `D:\...\Half-Life\cstrike`. Written 2026-08-10.
-Status: **approved 2026-08-10.** Not built yet.
+Status: **built and verified in game, 2026-08-11.** All four outcomes correct:
+gun-killing the last zombie leaves the round running and the respawn lands,
+melee ends it, zombies wiping the humans gives them the round, and the clock
+still gives it to the humans. That last-but-one case is the one this design
+came closest to destroying, and the original plan never thought to test it.
+
+Two narrow defects remain open and are listed under Risks.
 
 Settled during review: the plugin becomes `zp_round_rules` with `zp_rules_*`
 cvars, and the `sv_restartround` message quirk is accepted rather than worked
@@ -246,3 +252,29 @@ round that failed to end could just have been a round that was never going to.
 Not part of this work, listed so they are not lost: extra-item prices, FastDL,
 the Angelic Beast power pass, and moving that weapon onto the AK-47 base the way
 CrossFire has it.
+
+---
+
+## Still open after verification
+
+**A dead player who joins spectators latches the gate held.** `Task_Respawn`
+discards `zp_respawn_user()`'s return value, and `allowed_respawn()` refuses for
+spectators and once the round has ended. The recompute then runs with the
+executing task still counted, so the flag sticks at `"f"` and, if that was the
+last zombie, nothing ends the round but the clock. Narrow — it needs someone to
+die and then go to spectator — but real.
+
+**The compensation term can only add, never subtract.** A victim who is
+permadead *and* already carries a pending respawn task is counted as able to
+return, holding the gate through the only win check that death gets.
+
+**The winner text is intermittent while the sound is reliable.** ZP's
+announcement layer, not the gate. The `dhudmessage.inc` shim was checked and is
+clean — it defers to AMX Mod X 1.10's core natives. Cause not established.
+
+**Standing advice from the review:** there are eight places that write or
+recompute the flag, and only two of them can run before a win check —
+`Event_DeathMsg` and `client_disconnected`. Every fix round so far has been the
+same shape: the gate read mid-transition with a hand-written correction for that
+moment, and each round audited one site and inherited the rest. Collapsing to
+those two sites would remove the class rather than the instance.
