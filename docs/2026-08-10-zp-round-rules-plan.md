@@ -12,7 +12,8 @@
 
 ## Global Constraints
 
-- **Not a git repository.** There are no commits. Every install keeps the previous binary as `<name>.amxx.prev`, and every config edit keeps a `.bak`.
+- **Git is live.** `cstrike` is the repository root, remote `https://github.com/Kurkool/cs16-zp-nano`, branch `master`. Every task ends with a real commit. Only sources, includes, configs and the language file are tracked — `.amxx`, `.prev`, `.bak` and `.orig` are ignored, so still keep `<name>.amxx.prev` beside every installed plugin as the runtime rollback.
+- **The repository is public and `users.ini` / `sql.cfg` are excluded.** Do not un-ignore them; they are where an admin or database password would land.
 - **No test framework exists for AMXX here.** Verification is a named in-game case plus a specific log line. Never claim a task passes without the log line quoted.
 - **Never recompile `zombie_plague40.amxx`.** Its shipped `.sma` does not match the running `.amxx`; rebuilding it would silently drop features. ZP is changed through config only.
 - **Compiler:** `D:\Program Files (x86)\Steam\steamapps\common\Half-Life\cstrike\addons\amxmodx\scripting\amxxpc.exe`
@@ -34,7 +35,11 @@
 
 ---
 
-### Task 1: Prove `mp_round_infinite "f"` blocks the extermination check
+### Task 1: Prove `mp_round_infinite "f"` blocks the extermination check — PASSED 2026-08-10
+
+Result: the control run ended the round on a gun kill of the last zombie; with
+`"f"` set, every zombie died and play carried on in the same round. Tasks 2–4
+are cleared to proceed.
 
 No code. The entire plan rests on this cvar behaving as documented on build 10210, and it has never been switched on. If it does not work, stop and revise the design rather than continuing.
 

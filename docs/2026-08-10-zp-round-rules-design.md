@@ -204,9 +204,16 @@ since 2026-08-10 with nothing broken, but it changes movement code — the view
 roll while strafing came back, which is `sv_rollangle` behaving as Half-Life
 always did rather than as Valve's CS build forced it.
 
-**`mp_round_infinite` has not been switched on yet.** Every finding above about
-ReGameDLL is from running it with the cvar at its default of `0`. Case 3 is the
-first real test.
+**~~`mp_round_infinite` has not been switched on yet.~~ Tested 2026-08-10 and it
+works.** With `zp_endless_respawn 0` to keep the rescue out of the way:
+
+- control, `mp_round_infinite 0` — gun-killing the last zombie ended the round
+  at once with a human win, so the test can detect a round ending
+- `mp_round_infinite "f"` — every zombie dead and **play continued in the same
+  round**
+
+The control run is what makes the second result mean anything; without it a
+round that failed to end could just have been a round that was never going to.
 
 ## Rollback
 
