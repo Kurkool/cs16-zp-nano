@@ -235,6 +235,7 @@ public Event_NewRound()
 	{
 		g_bPermaDead[i] = false
 		g_bMeleeHit[i]  = false
+		g_iMakeZombieRetries[i] = 0
 
 		// a respawn still in flight from the previous round would fire into
 		// the new one
@@ -343,9 +344,15 @@ UpdateRoundEndGate(extraZombiesAboutToReturn = 0)
 		it is true most of the time for reasons that have nothing to do with
 		a pending human respawn - confirmed by grep, not assumed. Guarding
 		on it would wedge this flag far more often than the narrow gap it
-		would close. Left open: the window is a fixed 2s, and it takes the
-		last human dying inside it AND CS's win check landing in that same
-		2s (another death, a disconnect, or a team change) to matter.
+		would close.
+
+		Left open, and it turns out it cannot actually race this release
+		anyway: respawn_player_check_task returns immediately on
+		g_isalive[id] || g_endround (zombie_plague40.sma:7489), and
+		g_endround is set from the round-end message ReGameDLL sends
+		synchronously from inside the very CheckWinConditions() call this
+		release unblocks. By the time that 2s-later task could fire, the
+		round this human died in has already ended one way or the other.
 	*/
 	new bool:bHumansDone = (humans == 0)
 
@@ -402,6 +409,22 @@ public Fw_Killed_Post(victim, attacker, shouldgib)
 	if (victim < 1 || victim > 32 || !is_user_connected(victim))
 		return HAM_IGNORED
 
+	/*
+		Clean up before branching on permadead, not after. A stale
+		TASK_RESPAWN can exist here - ZP's own respawn_player_check_task can
+		revive a player out from under a pending retry, and if they then die
+		again on their next life, the old task is still scheduled - and the
+		permadead branch used to return before ever reaching the removal
+		that used to sit below it, leaking a task that
+		CountZombiesThatCanReturn() would go on counting forever. The retry
+		counter is reset here too so it is scoped to one respawn attempt
+		instead of accumulating across a player's whole connection (see
+		MAX_MAKEZOMBIE_RETRIES) - Event_NewRound resets it on a round
+		boundary, this resets it on every fresh death in between.
+	*/
+	remove_task(victim + TASK_RESPAWN)
+	g_iMakeZombieRetries[victim] = 0
+
 	// DeathMsg is emitted from inside CBasePlayer::Killed, so it has already
 	// run by the time this post hook does and the flag is settled
 	if (g_bPermaDead[victim])
@@ -414,8 +437,6 @@ public Fw_Killed_Post(victim, attacker, shouldgib)
 	}
 
 	new Float:delay = get_pcvar_float(g_pRespawnDelay)
-
-	remove_task(victim + TASK_RESPAWN)
 
 	if (get_pcvar_num(g_pDebug))
 		log_amx("[RULES] killed_post victim=%d permadead=0 -> respawn in %.2fs", victim, delay)
@@ -601,15 +622,42 @@ public Event_DeathMsg()
 
 		Trap: at this point ZP has already cleared g_isalive[victim]
 		(zombie_plague40.sma:1137 -> :1952) but our own Fw_Killed_Post has
-		not run yet, so no TASK_RESPAWN exists for them. A zombie that is
-		about to be rescheduled would read as gone from both
+		not run yet, so no TASK_RESPAWN exists for them yet either. Whoever
+		is about to be rescheduled would read as gone from both
 		zp_get_zombie_count() and CountZombiesThatCanReturn() and release
 		the flag one death early - the same bug this gate exists to
-		prevent, just moved earlier. g_bPermaDead[victim] is final for this
-		death by this line (set above if it's going to be set at all), so
-		it is what decides whether to count them as still coming back.
+		prevent, just moved earlier.
+
+		Corrected from the first attempt at this fix, which gated the
+		adjustment on bWasZombieVictim: Fw_Killed_Post schedules
+		TASK_RESPAWN for ANY non-permadead victim, human or zombie, with no
+		zp_get_user_zombie() check before doing it, and Task_Respawn always
+		brings them back on ZP_TEAM_ZOMBIE - a dead human is a zombie that
+		can return too. Gating on bWasZombieVictim undercounted by one on
+		every human death, including the ~24s window at the start of every
+		round where last round's zombies still sit on team T with
+		zp_get_zombie_count() already back at 0 (fw_PlayerSpawn_Post only
+		moves a spawning player to CT if (!g_newround),
+		zombie_plague40.sma:1818) - one fall or drowning death in that
+		window would have read n=0 and handed humans a win seconds into the
+		round, worse than the bug this whole fix exists to close.
+
+		What actually decides it is whether Fw_Killed_Post is about to
+		schedule a fresh respawn for this exact victim - mirroring its own
+		three conditions rather than the victim's past zombie status:
+		zp_rules_respawn has to be on (matches Fw_Killed_Post's own first
+		check - I1 already covers what happens when it's off, but this
+		would independently double-hold the gate too if it defaulted to
+		"yes, returning" regardless of the cvar), permadeath must not have
+		just stuck (g_bPermaDead[victim] is already final at this line),
+		and no TASK_RESPAWN can already exist for them (defence in depth for
+		the leak New-3 fixes at the source in Fw_Killed_Post - if one ever
+		exists here anyway, CountZombiesThatCanReturn() is already counting
+		it and adding a second would double it).
 	*/
-	UpdateRoundEndGate((bWasZombieVictim && !g_bPermaDead[victim]) ? 1 : 0)
+	new bool:bWillReturn = get_pcvar_num(g_pRespawn) && !g_bPermaDead[victim]
+	                       && !task_exists(victim + TASK_RESPAWN)
+	UpdateRoundEndGate(bWillReturn ? 1 : 0)
 }
 
 public Fw_RoundRespawn_Pre(id)
