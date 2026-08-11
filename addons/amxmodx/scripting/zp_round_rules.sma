@@ -564,9 +564,50 @@ public Task_Respawn(taskid)
 	if (get_pcvar_num(g_pDebug))
 		log_amx("[RULES] respawn_task victim=%d -> respawning as zombie", id)
 
-	zp_respawn_user(id, ZP_TEAM_ZOMBIE)
-	ClearScoreboardDeath(id)
-	PlayRespawnSound()
+	if (zp_respawn_user(id, ZP_TEAM_ZOMBIE))
+	{
+		ClearScoreboardDeath(id)
+		PlayRespawnSound()
+	}
+	else
+	{
+		/*
+			allowed_respawn() refuses for spectators and once the round has
+			ended (zombie_plague40.sma:8764-8774). Nothing else is going to
+			bring this player back, so they are out for the round - but it has
+			to be visible, or they simply never return with no line saying why.
+		*/
+		log_amx("[RULES] respawn_task victim=%d REFUSED by zp - staying dead this round", id)
+	}
+
+	/*
+		Drop this task before asking for the check, not after.
+
+		AMXX frees a one-shot task only once its callback returns, so until
+		this function does, task_exists(taskid) still finds THIS invocation -
+		and WillCountAsZombie()'s last term reads exactly that task. Without
+		this line, a refused respawn is counted as a zombie who can still
+		return: the gate holds, and the round hangs to the clock. Which is the
+		precise failure the call below exists to prevent.
+
+		The stale-task skip path earlier in this function already does this,
+		for the same reason. It was added there in fix round 2 of the previous
+		plan, after the same bug shipped once.
+	*/
+	remove_task(taskid)
+
+	/*
+		The one place the plugin has to start a win check rather than answer
+		one. If this was the last zombie and the respawn was refused, nothing
+		else is coming: CheckWinConditions has exactly three callers
+		(multiplay_gamerules.cpp:4185, :3686, :5199) and none of them is a
+		timer. Without this the round could only end on the clock.
+
+		Safe to call unconditionally - the guard at :888 makes it a no-op once
+		a winner is already decided, so there is no double round-end. Gate_Pre
+		runs first, as it does for any other caller.
+	*/
+	rg_check_win_conditions()
 }
 
 /*
