@@ -34,12 +34,16 @@
 	    last zombie is not a special case any more: every lethal hit kills,
 	    full stop, and the zombie team can genuinely sit at zero for up to
 	    zp_rules_respawn_delay seconds while a respawn is pending. What makes
-	    that safe is g_pRoundInfinite - UpdateRoundEndGate() holds CS's own
-	    team-extermination check off for as long as anyone can still come
-	    back, and releases it the instant nothing more can.
+	    that safe is g_pRoundInfinite. Gate_Pre() is a ReAPI pre-hook on
+	    CheckWinConditions: it answers "can anyone still come back" at the
+	    instant CS asks, a few lines before ReGameDLL reads the "f" bit.
+	    CheckRoundTimeExpired() (multiplay_gamerules.cpp:3052) reads the
+	    same cvar string every frame from Think(), but never tests "f" -
+	    that is the only bit this plugin writes, so nothing that decides a
+	    round outcome reads it in between.
 
 	    Round win by headshot is still gone, for the same reason it always
-	    was: a lethal headshot is a non-melee hit, so Fw_Killed_Post schedules
+	    was: a lethal headshot is a non-melee hit, so ScheduleRespawn schedules
 	    a respawn for it and the gate stays held even when it was the last
 	    zombie standing. Only melee, via permadeath, skips the respawn and
 	    lets the gate - and the round - close.
@@ -66,6 +70,7 @@
 #include <fakemeta>
 #include <hamsandwich>
 #include <zombieplague>
+#include <reapi>
 
 #define TASK_RESPAWN 8100
 
@@ -129,18 +134,31 @@ new g_pDebug, g_pRespawnSound
 	back, and CS cannot tell the difference.
 
 	ReGameDLL can. mp_round_infinite takes one flag per round-end check and
-	"f" is the team extermination one. Hold it while any zombie can still
-	return, release it when none can, and CS's own check becomes correct -
-	no cancelled damage, no healing anyone back to full.
+	"f" is the team extermination one. Compute it at the moment CS asks and
+	it is right by construction - hold while any zombie can still return,
+	release when none can, and CS's own check becomes correct - no cancelled
+	damage, no healing anyone back to full.
 
 	That one flag covers BOTH outcomes of the same check, not just the
-	human-win half - see UpdateRoundEndGate() for why it also has to release
+	human-win half - see Gate_Pre() for why it also has to release
 	the instant no human is left alive. set_pcvar_string() replaces the
 	whole flag string too, not just this bit; harmless today since nothing
 	else on this server drives mp_round_infinite, but worth knowing if that
 	ever changes.
 */
 new g_pRoundInfinite
+
+/*
+	Who is inside CBasePlayer::Killed right now, or 0.
+
+	When the gate runs from DeathNotice (multiplay_gamerules.cpp:4185) the
+	victim is mid-death: ZP has cleared its own alive flag
+	(zombie_plague40.sma:1137 -> :1952), the engine has set deadflag, and
+	Fw_Killed_Post has not run - so there is no TASK_RESPAWN to find either.
+	That player is invisible to every other term of the predicate, and this is
+	how it is told they exist.
+*/
+new g_iDyingVictim
 
 public plugin_precache()
 {
@@ -186,6 +204,18 @@ public plugin_init()
 	if (!g_pRoundInfinite)
 		log_amx("[RULES] mp_round_infinite not found - ReGameDLL is not loaded, the round-end gate is OFF")
 
+	/*
+		The gate is computed here and nowhere else. CheckWinConditions reads
+		mp_round_infinite at multiplay_gamerules.cpp:903, a few lines into its
+		own body, so a pre-hook write lands in the same call with nothing able
+		to run in between. That is what stops the cvar from being state that
+		has to be right at every instant.
+	*/
+	new HookChain:hGatePre = RegisterHookChain(RG_CSGameRules_CheckWinConditions, "Gate_Pre", false)
+
+	if (hGatePre == INVALID_HOOKCHAIN)
+		log_amx("[RULES] RegisterHookChain(CheckWinConditions) failed - Gate_Pre will never run, mp_round_infinite will never be written, the round-end gate is OFF")
+
 	register_event("HLTV", "Event_NewRound", "a", "1=0", "2=0")
 	register_event("DeathMsg", "Event_DeathMsg", "a")
 
@@ -221,12 +251,15 @@ public client_disconnected(id)
 	g_bMeleeHit[id]  = false
 	g_iMakeZombieRetries[id] = 0
 
+	/*
+		ReGameDLL calls CheckWinConditions itself from ClientDisconnected
+		(multiplay_gamerules.cpp:3686), so Gate_Pre runs for this disconnect
+		without being asked. Removing the task below is what makes it read
+		correctly - and WillCountAsZombie() checks is_user_connected() first
+		anyway, so the answer is right whichever side of that call this
+		forward happens to fire on.
+	*/
 	remove_task(id + TASK_RESPAWN)
-
-	// if this player was the last thing keeping the gate held (a pending
-	// respawn for the last zombie), removing their task above just changed
-	// the count and nothing else is coming to notice
-	UpdateRoundEndGate()
 }
 
 public Event_NewRound()
@@ -242,10 +275,16 @@ public Event_NewRound()
 		remove_task(i + TASK_RESPAWN)
 	}
 
-	// a fresh round always starts held; zombies have not been picked yet, so
-	// the count would read zero and open the gate at exactly the wrong time
-	if (g_pRoundInfinite)
-		set_pcvar_string(g_pRoundInfinite, "f")
+	/*
+		No forced "f" here any more. Every extermination check computes
+		its own "f" value fresh (Gate_Pre), including one that lands
+		inside the ~24s window before ZP has picked this round's zombies -
+		nothing that decides a round outcome ever sees a stale one.
+
+		g_iDyingVictim is reset as a round-boundary net. Fw_Killed_Post's
+		single exit is what actually keeps it honest.
+	*/
+	g_iDyingVictim = 0
 }
 
 public zp_round_started(gamemode, id)
@@ -277,95 +316,97 @@ bool:IsMeleeHit(attacker, damagebits)
 }
 
 /*
-	Can any zombie still come back? Alive counts, and so does dead with a
-	respawn already scheduled. Tasks are asked directly rather than kept in a
-	counter, because a counter is one missed decrement away from wedging the
-	round open forever.
+	Will this player be alive on the zombie side once everything currently in
+	flight has settled?
+
+	One question, asked the same way about every player. The old code asked a
+	different question at each of eight call sites and corrected the answer by
+	hand for whichever moment it happened to be; every bug across three fix
+	rounds was one of those corrections being wrong.
 */
-CountZombiesThatCanReturn()
+bool:WillCountAsZombie(id)
 {
-	new n = zp_get_zombie_count()
+	if (!is_user_connected(id))
+		return false
 
-	for (new i = 1; i <= 32; i++)
-	{
-		if (task_exists(i + TASK_RESPAWN))
-			n++
-	}
+	/*
+		Inside CBasePlayer::Killed right now. What decides it is what
+		ScheduleRespawn is about to do, so mirror its own two conditions.
 
-	return n
+		Deliberately NOT g_bWasZombie: a respawn is scheduled for any
+		non-permadead victim and Task_Respawn always returns them on
+		ZP_TEAM_ZOMBIE, so a dying human is a zombie that can return. Gating on
+		the victim's past team undercounts by one on every human death,
+		including inside the ~24s window where last round's zombies still sit
+		on team T with zp_get_zombie_count() already back at 0 - that was
+		NEW-1 Critical in fix round 2.
+
+		g_bPermaDead is final here: Event_DeathMsg sets it, and DeathNotice
+		sends DeathMsg at :4142 before calling CheckWinConditions at :4185.
+	*/
+	if (id == g_iDyingVictim)
+		return get_pcvar_num(g_pRespawn) != 0 && !g_bPermaDead[id]
+
+	if (is_user_alive(id))
+		return zp_get_user_zombie(id) != 0
+
+	// dead, but a respawn is already booked
+	return task_exists(id + TASK_RESPAWN) != 0
 }
 
 /*
-	extraZombiesAboutToReturn: see the call from Event_DeathMsg, which needs
-	to count a zombie that has died but has no TASK_RESPAWN yet. Every other
-	call site leaves this at 0, so n is exactly CountZombiesThatCanReturn().
+	...and on the human side. Simpler, because nothing on this server respawns
+	anyone as a human. ZP's zp_respawn_on_worldspawn_kill can, but only within
+	2s of a spawn, and it bails on g_endround (zombie_plague40.sma:7489), which
+	ReGameDLL sets synchronously from inside the very check this gate is
+	deciding. It cannot race us.
 */
-UpdateRoundEndGate(extraZombiesAboutToReturn = 0)
+bool:WillCountAsHuman(id)
+{
+	if (!is_user_connected(id) || id == g_iDyingVictim)
+		return false
+
+	return is_user_alive(id) && !zp_get_user_zombie(id)
+}
+
+/*
+	The only place mp_round_infinite is decided. Runs as a ReAPI pre-hook on
+	CheckWinConditions, so it is separated from the read at :903 by a handful
+	of lines inside one call - there is no window for the value to go stale,
+	because there is no gap.
+*/
+public Gate_Pre()
 {
 	if (!g_pRoundInfinite)
 		return
 
-	new n = CountZombiesThatCanReturn() + extraZombiesAboutToReturn
-	new humans = zp_get_human_count()
+	new zombies, humans
+
+	for (new id = 1; id <= 32; id++)
+	{
+		if      (WillCountAsZombie(id)) zombies++
+		else if (WillCountAsHuman(id))  humans++
+	}
 
 	/*
-		mp_round_infinite's "f" flag blocks ONE ReGameDLL check that decides
-		BOTH team-extermination outcomes at once
-		(regamedll/dlls/multiplay_gamerules.cpp, TeamExterminationCheck):
-		humans win once zombies hit zero, zombies win once humans hit zero.
-		Holding "f" for as long as a zombie can return - the normal state of
-		a round - correctly protects the human-win half, but on its own it
-		would also block the zombie-win half forever. Both release
-		conditions have to be checked here, or one win path stays wedged
-		shut permanently.
+		"f" blocks ONE ReGameDLL check that decides BOTH extermination
+		outcomes (TeamExterminationCheck): humans win at zero zombies, zombies
+		win at zero humans. Hold only while both sides still have someone, or
+		one of the two win paths wedges shut permanently.
+
+		ZP kills the last human rather than infecting them
+		(zombie_plague40.sma:2130-2132) precisely so the zombie-win branch has
+		a corpse still on CT to fire on. Do not "fix" that.
 	*/
+	new bool:bHold = (zombies > 0 && humans > 0)
 
-	// humans win once no zombie can still return - the condition this gate
-	// was originally written for
-	new bool:bZombiesDone = (n == 0)
-
-	/*
-		zombies win once no human is left alive. ZP kills the last human
-		outright instead of infecting them (zombie_plague40.sma:2130-2132),
-		specifically so this check has a real death to fire on.
-
-		NOT modelled, on purpose: a human can come back from the dead the
-		same way a zombie does. zp_respawn_on_worldspawn_kill
-		(zombieplague.cfg:18, on by default) arms respawn_player_check_task
-		2s after every spawn (zombie_plague40.sma:1790-1792) and force-
-		respawns the player if they are still not alive then - despite the
-		cvar's name this fires on death by any cause in that 2s window, not
-		just world damage. A task_exists() guard like
-		CountZombiesThatCanReturn()'s cannot cover it safely: the id it
-		would need, id+TASK_SPAWN, is reused by at least six unrelated
-		set_task calls in zombie_plague40.sma (task_hide_money,
-		respawn_player_check_task, show_menu_buy1 x2, bot_buy_extras,
-		remove_spawn_protection, respawn_player_task), so task_exists() on
-		it is true most of the time for reasons that have nothing to do with
-		a pending human respawn - confirmed by grep, not assumed. Guarding
-		on it would wedge this flag far more often than the narrow gap it
-		would close.
-
-		Left open, and it turns out it cannot actually race this release
-		anyway: respawn_player_check_task returns immediately on
-		g_isalive[id] || g_endround (zombie_plague40.sma:7489), and
-		g_endround is set from the round-end message ReGameDLL sends
-		synchronously from inside the very CheckWinConditions() call this
-		release unblocks. By the time that 2s-later task could fire, the
-		round this human died in has already ended one way or the other.
-	*/
-	new bool:bHumansDone = (humans == 0)
-
-	new bool:bHold = !bZombiesDone && !bHumansDone
-
-	// this sets mp_round_infinite's whole flag string, not just the "f" bit -
-	// harmless while nothing else on this server drives its other flags, but
-	// it would stomp them if that ever changes
+	// this sets the whole flag string, not just the "f" bit - harmless while
+	// nothing else on this server drives mp_round_infinite's other flags
 	set_pcvar_string(g_pRoundInfinite, bHold ? "f" : "0")
 
 	if (get_pcvar_num(g_pDebug))
-		log_amx("[RULES] gate zombiesThatCanReturn=%d -> mp_round_infinite=%s (humansAlive=%d)",
-			n, bHold ? "f" : "0", humans)
+		log_amx("[RULES] gate zombies=%d humans=%d dying=%d -> mp_round_infinite=%s",
+			zombies, humans, g_iDyingVictim, bHold ? "f" : "0")
 }
 
 public Fw_TakeDamage_Pre(victim, inflictor, attacker, Float:damage, damagebits)
@@ -388,39 +429,41 @@ public Fw_TakeDamage_Pre(victim, inflictor, attacker, Float:damage, damagebits)
 public Fw_Killed_Pre(victim, attacker, shouldgib)
 {
 	if (1 <= victim <= 32)
+	{
 		g_bWasZombie[victim] = (zp_get_user_zombie(victim) != 0)
+		g_iDyingVictim = victim
+	}
 
 	return HAM_IGNORED
 }
 
 public Fw_Killed_Post(victim, attacker, shouldgib)
 {
+	ScheduleRespawn(victim)
+
+	// one exit, always reached. The branching all lives in ScheduleRespawn,
+	// which may return early as often as it likes.
+	g_iDyingVictim = 0
+
+	return HAM_IGNORED
+}
+
+ScheduleRespawn(victim)
+{
 	if (!get_pcvar_num(g_pRespawn))
-	{
-		// this plugin isn't managing respawns at all with the cvar off, but
-		// a real death still just happened and nothing else will ever
-		// recompute the gate for it - without this, Event_NewRound's forced
-		// "f" at round start is never released and no round can end by
-		// extermination in either direction for as long as this stays 0
-		UpdateRoundEndGate()
-		return HAM_IGNORED
-	}
+		return
 
 	if (victim < 1 || victim > 32 || !is_user_connected(victim))
-		return HAM_IGNORED
+		return
 
 	/*
 		Clean up before branching on permadead, not after. A stale
 		TASK_RESPAWN can exist here - ZP's own respawn_player_check_task can
 		revive a player out from under a pending retry, and if they then die
-		again on their next life, the old task is still scheduled - and the
-		permadead branch used to return before ever reaching the removal
-		that used to sit below it, leaking a task that
-		CountZombiesThatCanReturn() would go on counting forever. The retry
-		counter is reset here too so it is scoped to one respawn attempt
+		again on their next life the old task is still scheduled. The retry
+		counter is reset here too, so it is scoped to one respawn attempt
 		instead of accumulating across a player's whole connection (see
-		MAX_MAKEZOMBIE_RETRIES) - Event_NewRound resets it on a round
-		boundary, this resets it on every fresh death in between.
+		MAX_MAKEZOMBIE_RETRIES).
 	*/
 	remove_task(victim + TASK_RESPAWN)
 	g_iMakeZombieRetries[victim] = 0
@@ -432,22 +475,32 @@ public Fw_Killed_Post(victim, attacker, shouldgib)
 		if (get_pcvar_num(g_pDebug))
 			log_amx("[RULES] killed_post victim=%d permadead=1 -> NO respawn, stays down", victim)
 
-		UpdateRoundEndGate()
-		return HAM_IGNORED
+		return
 	}
 
 	new Float:delay = get_pcvar_float(g_pRespawnDelay)
 
+	/*
+		Floored, not branched. A delay of zero or less used to call
+		zp_respawn_user() straight from this post hook instead of scheduling
+		a task - the one respawn on this server that left no TASK_RESPAWN
+		behind it, so it was invisible to WillCountAsZombie()'s
+		task_exists() term.
+
+		It also bypassed Task_Respawn entirely, and with it the
+		ZP_TASK_MAKEZOMBIE retry guard below: a death that hit this path
+		during ZP's pre-pick window would have respawned straight through
+		ZP's own fw_PlayerSpawn_Post human path, producing exactly the
+		"zombie holding a gun" bug that retry guard exists to prevent.
+		Routing every respawn through Task_Respawn closes both gaps at once.
+	*/
+	if (delay < 0.1)
+		delay = 0.1
+
 	if (get_pcvar_num(g_pDebug))
 		log_amx("[RULES] killed_post victim=%d permadead=0 -> respawn in %.2fs", victim, delay)
 
-	if (delay <= 0.0)
-		zp_respawn_user(victim, ZP_TEAM_ZOMBIE)
-	else
-		set_task(delay, "Task_Respawn", victim + TASK_RESPAWN)
-
-	UpdateRoundEndGate()
-	return HAM_IGNORED
+	set_task(delay, "Task_Respawn", victim + TASK_RESPAWN)
 }
 
 public Task_Respawn(taskid)
@@ -464,15 +517,12 @@ public Task_Respawn(taskid)
 
 		/*
 			AMXX only frees a one-shot task after its callback returns, so
-			task_exists(taskid) - and therefore
-			CountZombiesThatCanReturn()'s count for this id - still matches
-			THIS invocation until this function is done. Remove it
-			explicitly before recomputing, or the count reads one too high
-			and the gate stays held in exactly the case this recompute was
-			added for.
+			task_exists(taskid) would still match THIS invocation until this
+			function is done. Remove it explicitly - WillCountAsZombie() reads
+			that task, and the next win check must not see one for a player
+			who is not coming back.
 		*/
 		remove_task(taskid)
-		UpdateRoundEndGate()
 		return
 	}
 
@@ -517,8 +567,6 @@ public Task_Respawn(taskid)
 	zp_respawn_user(id, ZP_TEAM_ZOMBIE)
 	ClearScoreboardDeath(id)
 	PlayRespawnSound()
-
-	UpdateRoundEndGate()
 }
 
 /*
@@ -576,8 +624,8 @@ public Event_DeathMsg()
 	new bool:bWasZombieVictim = g_bWasZombie[victim]
 
 	// only a human killing a zombie earns permadeath / the announce / the
-	// special kill sound - unchanged from before, just folded into one
-	// condition so the gate recompute below still runs on every other exit
+	// special kill sound - one guard condition rather than a chain of early
+	// returns
 	if (killer >= 1 && killer <= 32 && killer != victim && is_user_connected(killer)
 	    && bWasZombieVictim && !zp_get_user_zombie(killer))
 	{
@@ -606,58 +654,6 @@ public Event_DeathMsg()
 		if (get_pcvar_num(g_pKillSound))
 			PlayKillSound(killer, bPermaKill ? SND_KILL_HEADSHOT : SND_KILL_NORMAL)
 	}
-
-	/*
-		Recompute the gate here, not only in Fw_Killed_Post - CS's ONLY win
-		check for this death has already run by the time a Ham_Killed POST
-		hook fires. CheckWinConditions() has exactly three callers in
-		multiplay_gamerules.cpp: DeathNotice (:4185, inside
-		CBasePlayer::Killed, right after SendDeathMessage at :4142),
-		ClientDisconnected (:3686) and ChangePlayerTeam (:5199). Think()
-		never calls it. So a post hook on Killed is always one check late,
-		and if this was the last relevant death, nothing else is coming to
-		trigger another one - the round would just hang instead of ending.
-		DeathMsg is sent from inside that same DeathNotice call, ahead of
-		the check, so recomputing here lands in time.
-
-		Trap: at this point ZP has already cleared g_isalive[victim]
-		(zombie_plague40.sma:1137 -> :1952) but our own Fw_Killed_Post has
-		not run yet, so no TASK_RESPAWN exists for them yet either. Whoever
-		is about to be rescheduled would read as gone from both
-		zp_get_zombie_count() and CountZombiesThatCanReturn() and release
-		the flag one death early - the same bug this gate exists to
-		prevent, just moved earlier.
-
-		Corrected from the first attempt at this fix, which gated the
-		adjustment on bWasZombieVictim: Fw_Killed_Post schedules
-		TASK_RESPAWN for ANY non-permadead victim, human or zombie, with no
-		zp_get_user_zombie() check before doing it, and Task_Respawn always
-		brings them back on ZP_TEAM_ZOMBIE - a dead human is a zombie that
-		can return too. Gating on bWasZombieVictim undercounted by one on
-		every human death, including the ~24s window at the start of every
-		round where last round's zombies still sit on team T with
-		zp_get_zombie_count() already back at 0 (fw_PlayerSpawn_Post only
-		moves a spawning player to CT if (!g_newround),
-		zombie_plague40.sma:1818) - one fall or drowning death in that
-		window would have read n=0 and handed humans a win seconds into the
-		round, worse than the bug this whole fix exists to close.
-
-		What actually decides it is whether Fw_Killed_Post is about to
-		schedule a fresh respawn for this exact victim - mirroring its own
-		three conditions rather than the victim's past zombie status:
-		zp_rules_respawn has to be on (matches Fw_Killed_Post's own first
-		check - I1 already covers what happens when it's off, but this
-		would independently double-hold the gate too if it defaulted to
-		"yes, returning" regardless of the cvar), permadeath must not have
-		just stuck (g_bPermaDead[victim] is already final at this line),
-		and no TASK_RESPAWN can already exist for them (defence in depth for
-		the leak New-3 fixes at the source in Fw_Killed_Post - if one ever
-		exists here anyway, CountZombiesThatCanReturn() is already counting
-		it and adding a second would double it).
-	*/
-	new bool:bWillReturn = get_pcvar_num(g_pRespawn) && !g_bPermaDead[victim]
-	                       && !task_exists(victim + TASK_RESPAWN)
-	UpdateRoundEndGate(bWillReturn ? 1 : 0)
 }
 
 public Fw_RoundRespawn_Pre(id)
