@@ -692,10 +692,9 @@ Replace the tail of `Task_Respawn` — the three statements at the end of the fu
 	{
 		/*
 			allowed_respawn() refuses for spectators and once the round has
-			ended. Nothing to clean up - no task survives this callback, and
-			WillCountAsZombie() then reads this player as dead with no booking,
-			which is the truth. But it has to be visible, or a player simply
-			never comes back with no line saying why.
+			ended (zombie_plague40.sma:8764-8774). Nothing else is going to
+			bring this player back, so they are out for the round - but it has
+			to be visible, or they simply never return with no line saying why.
 		*/
 		log_amx("[RULES] respawn_task victim=%d REFUSED by zp - staying dead this round", id)
 	}
@@ -706,6 +705,22 @@ Replace the tail of `Task_Respawn` — the three statements at the end of the fu
 Immediately below, as the last statement in `Task_Respawn`:
 
 ```pawn
+	/*
+		Drop this task before asking for the check, not after.
+
+		AMXX frees a one-shot task only once its callback returns, so until
+		this function does, task_exists(taskid) still finds THIS invocation -
+		and WillCountAsZombie()'s last term reads exactly that task. Without
+		this line, a refused respawn is counted as a zombie who can still
+		return: the gate holds, and the round hangs to the clock. Which is the
+		precise failure the call below exists to prevent.
+
+		The stale-task skip path earlier in this function already does this,
+		for the same reason. It was added there in fix round 2 of the previous
+		plan, after the same bug shipped once.
+	*/
+	remove_task(taskid)
+
 	/*
 		The one place the plugin has to start a win check rather than answer
 		one. If this was the last zombie and the respawn was refused, nothing
@@ -719,6 +734,8 @@ Immediately below, as the last statement in `Task_Respawn`:
 	*/
 	rg_check_win_conditions()
 ```
+
+`remove_task(taskid)` goes outside the success/failure branches, immediately before the check. On the success path it is redundant — `zp_respawn_user()` spawns the player synchronously, so `WillCountAsZombie()` short-circuits on `is_user_alive()` and never reaches the `task_exists()` term — but putting it on one path only means the next reader has to re-derive which path needs it. Unconditional is one fact instead of two.
 
 - [ ] **Step 3: Compile**
 
