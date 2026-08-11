@@ -89,6 +89,11 @@ CHalfLifeMultiplay::CheckWinConditions()
       v :935  TeamExterminationCheck runs or is blocked accordingly
 ```
 
+(ReAPI's hook chain enum for this is `RG_CSGameRules_CheckWinConditions` — named
+after the second argument of the `LINK_HOOK_CLASS_VOID_CUSTOM_CHAIN2` macro that
+declares it at `:881`, not the C++ class shown above. Confirmed in "Risk gate"
+below.)
+
 ### Sites that write `mp_round_infinite`
 
 | Before | After |
@@ -325,6 +330,52 @@ load rather than failing silently.
 be checked against the shipped `reapi.inc` before use.** This server has already
 paid for trusting an unverified artefact once (`za_ru_lavam4a1` running a shipped
 binary that matched no local build).
+
+### Outcome (2026-08-11)
+
+Steps 6, 11 and 12 passed on ReAPI **5.29.0.358**. The risk gate is open.
+
+**Step 6 — module loads.** `reapi` shows `running`, and the hook re-registers
+cleanly across map changes:
+```
+L 08/11/2026 - 22:25:37: [test_reapi_probe.amxx] [PROBE] RegisterHookChain(CheckWinConditions, pre) returned 4210689
+L 08/11/2026 - 22:34:39: [test_reapi_probe.amxx] [PROBE] RegisterHookChain(CheckWinConditions, pre) returned 4210689
+```
+
+**Step 11 — control run (`probe_hold 0`).** Humans won when the last zombie was
+shot; the test can detect a round ending:
+```
+L 08/11/2026 - 22:30:13: [test_reapi_probe.amxx] [PROBE] CheckWinConditions pre-hook fired, wrote mp_round_infinite=0
+```
+
+**Step 12 — real test (`probe_hold 1`).** The round did not end, in both
+directions of `TeamExterminationCheck` (tested separately): last zombie shot
+dead, and all humans dead.
+```
+L 08/11/2026 - 22:31:03: [test_reapi_probe.amxx] [PROBE] CheckWinConditions pre-hook fired, wrote mp_round_infinite=f
+L 08/11/2026 - 22:31:59: [test_reapi_probe.amxx] [PROBE] CheckWinConditions pre-hook fired, wrote mp_round_infinite=f
+```
+No further `CheckWinConditions` calls for 2.5 minutes after 22:31:59, until the
+map changed at 22:34:35 — nobody left alive to die, so nothing left to trigger a
+check.
+
+**Naming correction.** The real hook chain enum is
+**`RG_CSGameRules_CheckWinConditions`**, not the `RG_CHalfLifeMultiplay_…` form
+this document's prose implied (see the Architecture diagram above, now
+annotated). It is re-derivable from source: `multiplay_gamerules.cpp:881` reads
+`LINK_HOOK_CLASS_VOID_CUSTOM_CHAIN2(CHalfLifeMultiplay, CSGameRules, CheckWinConditions)`,
+and ReAPI names the hook chain after the macro's **second** argument
+(`CSGameRules`), not the first, which is the actual C++ class
+(`CHalfLifeMultiplay`). Confirmed against the shipped
+`reapi_gamedll_const.inc:1202`. The native name, `rg_check_win_conditions()`,
+matched this document as written — no correction needed there. Task 2 must use
+the corrected hook name.
+
+**Observation for Task 2.** In testing, `CheckWinConditions` was observed firing
+in pairs — two calls within the same second per death event — so `Gate_Pre()`
+will run about twice per event. It is idempotent and cheap, so this is
+harmless, but duplicate `[RULES] gate` lines in Task 2's logs are expected and
+must not be read as a bug.
 
 ## Rollback
 
