@@ -33,11 +33,35 @@ Line numbers below are from ReGameDLL_CS 5.30.0.814, file
 `.superpowers/sdd/2026-08-10-zp-round-rules-plan/regamedll-multiplay_gamerules.cpp`
 (git-ignored). ZP line numbers are from the shipped `zombie_plague40.sma`.
 
-`CheckWinConditions()` has exactly three callers:
+**Correction, 2026-08-12 whole-branch review.** This section originally said
+`CheckWinConditions()` "has exactly three callers." It has four. The fourth is
+`CBasePlayer::Killed` itself, calling it directly, in addition to the path
+through `PlayerKilled` -> `DeathNotice` -> `CheckWinConditions()` at `:4185`
+that the table below already listed. It is not a guess - ReGameDLL's own
+comment two lines above the `:4185` call reads:
+
+```
+// TODO: It is called in CBasePlayer::Killed too, most likely,
+// an unnecessary call. (Need investigate)
+CheckWinConditions();
+```
+
+`CBasePlayer::Killed` is implemented outside this file (in `player.cpp`, not
+part of the vendored copy this repo keeps), so it has no line number to give
+it here - but the comment is enough to establish that it exists, and that
+ReGameDLL's own authors already flagged it as redundant with the `DeathNotice`
+path. This is also the answer to a question this project recorded as open in
+three places (the progress ledger, this document, and the handoff): every
+death fires `CheckWinConditions()` twice - once from `Killed` directly, once
+from `Killed -> PlayerKilled -> DeathNotice` - while a disconnect or a team
+change fires it once, because neither of those goes through `Killed` at all.
+The argument this design depends on - that none of the callers is a per-frame
+timer - is unaffected; only the count was wrong.
 
 | Caller | Line | Reachable from |
 |---|---|---|
-| `DeathNotice`, inside `CBasePlayer::Killed` | `:4185` | every death |
+| `DeathNotice`, inside `CBasePlayer::Killed` (via `PlayerKilled`) | `:4185` | every death |
+| `CBasePlayer::Killed` itself | not in this file, see above | every death (the second of the pair) |
 | `ClientDisconnected` | `:3686` | every disconnect |
 | `ChangePlayerTeam` | `:5199` | a **live** player changing team only |
 
@@ -375,7 +399,10 @@ the corrected hook name.
 in pairs — two calls within the same second per death event — so `Gate_Pre()`
 will run about twice per event. It is idempotent and cheap, so this is
 harmless, but duplicate `[RULES] gate` lines in Task 2's logs are expected and
-must not be read as a bug.
+must not be read as a bug. (Why, settled two whole-branch reviews later: see
+"Source references" above - `CBasePlayer::Killed` calls `CheckWinConditions()`
+both directly and through `DeathNotice`, so every death fires it twice. This
+was still an open question when Task 2 was written.)
 
 ## Rollback
 

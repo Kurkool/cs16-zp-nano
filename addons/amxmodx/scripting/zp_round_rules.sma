@@ -59,11 +59,13 @@
 	    Left as is on purpose.
 
 	cvars:
-		zp_rules_permadeath           1 = melee kills stick for the round
-		zp_rules_announce  1 = chat line on a permanent kill
-		zp_rules_kill_sound              1 = play the kill feedback sound
-		zp_rules_respawn         1 = take respawn over from ZP
-		zp_rules_respawn_delay   seconds before a normal death comes back
+		zp_rules_permadeath    1 = melee kills stick for the round
+		zp_rules_announce      1 = chat line on a permanent kill
+		zp_rules_kill_sound    1 = play the kill feedback sound
+		zp_rules_respawn       1 = take respawn over from ZP
+		zp_rules_respawn_delay seconds before a normal death comes back
+		zp_rules_debug         1 = log the death/respawn trace to the amxx log
+		zp_rules_respawn_sound 1 = play the zombie-arrival sound on a respawn
 */
 
 #include <amxmodx>
@@ -523,6 +525,37 @@ public Task_Respawn(taskid)
 			who is not coming back.
 		*/
 		remove_task(taskid)
+
+		/*
+			Ask for the check here too - this branch can be the exact "no
+			zombie can return" moment the REFUSED branch at the tail of this
+			function exists to catch, just reached by a different door.
+
+			zp_respawn_on_worldspawn_kill 1 (zombieplague.cfg:18) makes ZP arm
+			its own respawn_player_check_task 2.0s after EVERY spawn
+			(zombie_plague40.sma:1791-1792), on a timer that runs whether or
+			not this plugin is watching. A death that falls inside the gap
+			between that fixed 2.0s mark and zp_rules_respawn_delay lets ZP's
+			check win the race: it force-respawns the player through
+			respawn_player_manually() with g_respawn_as_zombie set from
+			whatever team they were on AT DEATH (zombie_plague40.sma:
+			7501-7504) - a dying human comes back human, not zombie. This
+			function then reaches this branch with is_user_alive(id) true,
+			and without the call below it would return having quietly moved
+			that player from the zombie side of the count (the task this
+			branch just removed) to the human side, with no
+			CheckWinConditions() coming from anywhere else to notice - ZP's
+			own respawn timer does not ask for one.
+
+			Unconditional and safe for the other two ways into this branch
+			too (disconnected, permadead): the :888 guard turns an already-
+			decided or unaffected check into a no-op, same as it does for the
+			REFUSED branch below. Deliberately NOT done in the retry-and-
+			reschedule branch a few lines down - that one only defers the
+			same task instead of dropping it, so nothing this predicate reads
+			has changed; see the comment there for why it has to stay silent.
+		*/
+		rg_check_win_conditions()
 		return
 	}
 
@@ -536,6 +569,15 @@ public Task_Respawn(taskid)
 		zombie holding a gun. A zombie can still be alive and get killed
 		during this window (it survived from the previous round), so this is
 		a real, observed case, not a hypothetical one. Wait it out instead.
+
+		This retry loop deliberately never reaches rg_check_win_conditions()
+		at the tail of this function. The task below is only rescheduled, not
+		dropped - it is still the same taskid, still pending - so
+		task_exists(id + TASK_RESPAWN) still reads true and nothing
+		WillCountAsZombie() looks at has changed. A death that lands in this
+		window can retry up to MAX_MAKEZOMBIE_RETRIES times; asking CS to
+		re-decide the round on every one of them would be up to 120 calls
+		that all get the same answer, for a player whose count hasn't moved.
 	*/
 	// outside=1: id 3000 belongs to zombie_plague40.sma, not to us, and
 	// task_exists() only searches the calling plugin's own tasks unless
@@ -561,8 +603,11 @@ public Task_Respawn(taskid)
 
 	g_iMakeZombieRetries[id] = 0
 
+	// logged before the attempt, so the wording has to stay true whichever
+	// way zp_respawn_user() is about to go - "attempting", not "->", because
+	// the very next line can be the REFUSED one below it
 	if (get_pcvar_num(g_pDebug))
-		log_amx("[RULES] respawn_task victim=%d -> respawning as zombie", id)
+		log_amx("[RULES] respawn_task victim=%d attempting respawn as zombie", id)
 
 	if (zp_respawn_user(id, ZP_TEAM_ZOMBIE))
 	{
@@ -599,9 +644,23 @@ public Task_Respawn(taskid)
 	/*
 		The one place the plugin has to start a win check rather than answer
 		one. If this was the last zombie and the respawn was refused, nothing
-		else is coming: CheckWinConditions has exactly three callers
-		(multiplay_gamerules.cpp:4185, :3686, :5199) and none of them is a
-		timer. Without this the round could only end on the clock.
+		else is coming: CheckWinConditions has FOUR callers in ReGameDLL, not
+		three - DeathNotice (multiplay_gamerules.cpp:4185, reached via
+		PlayerKilled), ClientDisconnected (:3686), ChangePlayerTeam (:5199),
+		and CBasePlayer::Killed itself, calling it a second time directly.
+		The fourth one is not a guess - ReGameDLL's own comment two lines
+		above the :4185 call says so outright:
+
+			// TODO: It is called in CBasePlayer::Killed too, most likely,
+			// an unnecessary call. (Need investigate)
+
+		That is also the answer to why this plugin's own [RULES] gate line
+		arrives in pairs on every death and singly on a disconnect or a team
+		change: a death goes through Killed, which fires both the direct call
+		and the DeathNotice one; a disconnect or team change goes through
+		neither path Killed uses, so it only fires once. None of the four is
+		a timer. Without the call below, the round could only end on the
+		clock.
 
 		Safe to call unconditionally - the guard at :888 makes it a no-op once
 		a winner is already decided, so there is no double round-end. Gate_Pre

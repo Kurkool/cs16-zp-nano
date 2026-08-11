@@ -7,7 +7,9 @@ melee ends it, zombies wiping the humans gives them the round, and the clock
 still gives it to the humans. That last-but-one case is the one this design
 came closest to destroying, and the original plan never thought to test it.
 
-Two narrow defects remain open and are listed under Risks.
+Two narrow defects were found during this design's own verification pass and
+are recorded, with how each was later closed, under "Still open after
+verification" below - not under Risks, despite what this line used to say.
 
 Settled during review: the plugin becomes `zp_round_rules` with `zp_rules_*`
 cvars, and the `sv_restartround` message quirk is accepted rather than worked
@@ -257,24 +259,52 @@ CrossFire has it.
 
 ## Still open after verification
 
-**A dead player who joins spectators latches the gate held.** `Task_Respawn`
-discards `zp_respawn_user()`'s return value, and `allowed_respawn()` refuses for
-spectators and once the round has ended. The recompute then runs with the
-executing task still counted, so the flag sticks at `"f"` and, if that was the
-last zombie, nothing ends the round but the clock. Narrow — it needs someone to
-die and then go to spectator — but real.
+**Historical note, added during the whole-branch review for `feat/round-rules`,
+2026-08-12.** The findings below were real when this document was written, on
+2026-08-10. Two were dissolved outright by the gate restructure in
+`docs/2026-08-11-zp-gate-restructure-design.md`, which replaced every writer of
+`mp_round_infinite` with a single ReAPI pre-hook (`Gate_Pre()`) that computes the
+flag fresh at the instant `CheckWinConditions()` reads it. The third - the
+intermittent winner text - is untouched and still open; it was never the gate's
+doing (see `docs/2026-08-11-handoff.md`, "Open"). Kept here rather than deleted,
+so a reader can see that these were real findings and see exactly what closed
+them, instead of finding a clean section with no memory of why.
 
-**The compensation term can only add, never subtract.** A victim who is
-permadead *and* already carries a pending respawn task is counted as able to
-return, holding the gate through the only win check that death gets.
+**A dead player who joins spectators latches the gate held.** Dissolved.
+`Task_Respawn` no longer writes the gate at all - there is nothing left to
+latch. The restructure's own ledger went one step further than "dissolved":
+this path was never reachable on this server in the first place, because ZP
+swallows `chooseteam` and `jointeam` for anyone already holding a team, dead or
+alive (`clcmd_changeteam`, `zombie_plague40.sma:3124-3136`), and team
+membership survives death - a dead player cannot reach CS's own spectate menu
+here; ZP's own menu intercepts the command first. That does not retire the
+original finding: the code was still wrong without the fix, and the scenario
+simply could not be staged on this particular server to prove it.
 
-**The winner text is intermittent while the sound is reliable.** ZP's
-announcement layer, not the gate. The `dhudmessage.inc` shim was checked and is
-clean — it defers to AMX Mod X 1.10's core natives. Cause not established.
+**The compensation term can only add, never subtract.** Dissolved. There is no
+compensation term any more. The restructure replaced the whole read-modify-
+write shape with one predicate (`WillCountAsZombie` / `WillCountAsHuman`) asked
+the same way about every player on every check, so each player is classified
+exactly once and there is nothing left to compensate for.
 
-**Standing advice from the review:** there are eight places that write or
+**The winner text is intermittent while the sound is reliable.** Still open.
+ZP's announcement layer, not the gate. The `dhudmessage.inc` shim was checked
+and is clean — it defers to AMX Mod X 1.10's core natives. Cause still not
+established as of the 2026-08-12 review; chasing it further would need
+recompiling `zombie_plague40.amxx`, which stays off the table - its `.sma`
+does not match the running binary.
+
+**Standing advice from the review: there are eight places that write or
 recompute the flag, and only two of them can run before a win check —
 `Event_DeathMsg` and `client_disconnected`. Every fix round so far has been the
-same shape: the gate read mid-transition with a hand-written correction for that
-moment, and each round audited one site and inherited the rest. Collapsing to
-those two sites would remove the class rather than the instance.
+same shape: the gate read mid-transition with a hand-written correction for
+that moment, and each round audited one site and inherited the rest. Collapsing
+to those two sites would remove the class rather than the instance.** Acted on,
+and taken further than proposed. The 2026-08-11 restructure did not collapse to
+the two sites this document named - it collapsed to **one**: a ReAPI pre-hook
+on `CheckWinConditions` itself, which runs a few lines before ReGameDLL reads
+the cvar in the same call, so there is no longer a "before a win check" timing
+question for any site to get right or wrong. See
+`docs/2026-08-11-zp-gate-restructure-design.md` for the mechanism and
+`docs/2026-08-11-handoff.md` for how it was verified in game. This is exactly
+the kind of standing advice that stops applying once someone does the work.
