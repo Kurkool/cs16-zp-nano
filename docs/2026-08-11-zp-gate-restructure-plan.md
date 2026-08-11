@@ -128,8 +128,8 @@ Expected: a row for `reapi` with status `running`. If it says `error`, read `<CS
 
 Do not trust the names written in this plan. Open `<CS>/addons/amxmodx/scripting/include/reapi_gamedll_const.inc` (and `reapi_gamedll.inc` for the natives) and confirm:
 
-- the hook chain enum entry for `CheckWinConditions` — expected `RG_CHalfLifeMultiplay_CheckWinConditions`
-- the native that triggers a check — expected `rg_check_win_conditions()`
+- the hook chain enum entry for `CheckWinConditions` — **ANSWERED 2026-08-11: `RG_CSGameRules_CheckWinConditions`**, at `reapi_gamedll_const.inc:1202`. The name guessed in the first draft of this plan, `RG_CHalfLifeMultiplay_CheckWinConditions`, does not exist. The real one is re-derivable from source: `multiplay_gamerules.cpp:881` is `LINK_HOOK_CLASS_VOID_CUSTOM_CHAIN2(CHalfLifeMultiplay, CSGameRules, CheckWinConditions)` and ReAPI names the hook after the macro's **second** argument, not the class.
+- the native that triggers a check — **ANSWERED 2026-08-11: `rg_check_win_conditions()`**, at `reapi_gamedll.inc:949`. Matches the guess.
 
 If either differs, use the real name everywhere in this plan. This server has already paid once for trusting an artefact that was never opened (`za_ru_lavam4a1` running a shipped binary that matched no local build).
 
@@ -162,7 +162,7 @@ public plugin_init()
 	// the real test are the same code path with this flipped.
 	g_pHold = register_cvar("probe_hold", "0")
 
-	new ret = RegisterHookChain(RG_CHalfLifeMultiplay_CheckWinConditions, "Probe_Pre", false)
+	new ret = RegisterHookChain(RG_CSGameRules_CheckWinConditions, "Probe_Pre", false)
 
 	log_amx("[PROBE] RegisterHookChain(CheckWinConditions, pre) returned %d", ret)
 }
@@ -274,7 +274,7 @@ The restructure itself. After this, `mp_round_infinite` is written in one place 
 - Modify: `<CS>/addons/amxmodx/configs/zombieplague.cfg` (comment block only)
 
 **Interfaces:**
-- Consumes: Task 1's confirmed symbol names — `RG_CHalfLifeMultiplay_CheckWinConditions` and the `reapi` include.
+- Consumes: Task 1's confirmed symbol names — `RG_CSGameRules_CheckWinConditions` (confirmed against `reapi_gamedll_const.inc:1202`; **not** the `RG_CHalfLifeMultiplay_…` form this plan first guessed) and the `reapi` include.
 - Produces: `bool:WillCountAsZombie(id)`, `bool:WillCountAsHuman(id)`, `public Gate_Pre()`, `ScheduleRespawn(victim)`, and the global `g_iDyingVictim`. Task 3 modifies `Task_Respawn`, which relies on none of these directly but must not reintroduce a gate write.
 
 - [ ] **Step 1: Add the include**
@@ -315,7 +315,7 @@ In `plugin_init`, immediately after the `g_pRoundInfinite` lookup and its `if (!
 		to run in between. That is what stops the cvar from being state that
 		has to be right at every instant.
 	*/
-	RegisterHookChain(RG_CHalfLifeMultiplay_CheckWinConditions, "Gate_Pre", false)
+	RegisterHookChain(RG_CSGameRules_CheckWinConditions, "Gate_Pre", false)
 ```
 
 - [ ] **Step 4: Replace the counter and the old gate with the predicate**
@@ -806,6 +806,8 @@ Remove-Item "$s\test_reapi_probe.sma","$s\test_reapi_probe.amxx","$p\test_reapi_
 ```
 
 Then remove its two commented lines from `plugins-zplague.ini`.
+
+While in that file, fix the now-stale comment above `addon_floating_damage.amxx`. It reads *"Compiled locally with the reapi include commented out, since there is no reapi module installed."* The second half stopped being true in Task 1. Replace that clause with: *"since there was no reapi module installed at the time. There is one now — see modules.ini — but this plugin is still running the build that has it compiled out, deliberately. Rebuilding it with the reapi path enabled is a separate change with its own verification."*
 
 - [ ] **Step 2: Confirm nothing still references it**
 
