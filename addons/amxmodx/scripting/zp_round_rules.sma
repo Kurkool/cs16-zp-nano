@@ -565,8 +565,9 @@ public Task_Respawn(taskid)
 		TASK_MAKEZOMBIE is still pending. Its fw_PlayerSpawn_Post
 		(zombie_plague40.sma:1795) only calls zombieme() when
 		g_respawn_as_zombie[id] && !g_newround, so spawning into this window
-		falls through to the human path and skips the weapon strip - a
-		zombie holding a gun. A zombie can still be alive and get killed
+		skips the entire zombieme() call and falls through to the human
+		path instead - a zombie holding a gun. A zombie can still be alive
+		and get killed
 		during this window (it survived from the previous round), so this is
 		a real, observed case, not a hypothetical one. Wait it out instead.
 
