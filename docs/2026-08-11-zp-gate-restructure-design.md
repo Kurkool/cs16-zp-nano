@@ -1,6 +1,6 @@
 # ZP Round-End Gate — Restructure Design
 
-**Status:** approved 2026-08-11, not yet built
+**Status:** built 2026-08-12, on ReAPI 5.29.0.358
 **Branch:** `feat/round-rules`, on top of `91e34b3` (the verified-in-game build)
 **Supersedes the gate implementation in:** `2026-08-10-zp-round-rules-design.md` (that
 document's *design* is unchanged and was verified; this replaces how it is expressed
