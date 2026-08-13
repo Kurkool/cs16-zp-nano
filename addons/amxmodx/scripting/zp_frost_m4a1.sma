@@ -30,7 +30,40 @@ enum _:Sprites
 new g_iSprites[Sprites]
 
 new g_iItemID, g_iM4A1FrostSpr, g_iMsgScreenFade, g_iMaxPlayers, g_iHudSync, g_iSpriteLaser, g_iGlassGibs, g_iFreezeDmg, g_fFrostTime, g_iDmgMultiplier, g_iStatusIcon, g_iDmgWhileFrozen
-new bool:g_bHasFrostM4A1[33], g_bIsFrozen[33]
+/*
+	Ownership lives on the weapon entity, not on the player - rewritten by
+	setup 2026-08-13.
+
+	This plugin already stamped pev_impulse with 1997, but only while the
+	weapon was lying on the ground: fw_SetModel set it on drop and
+	fw_FrostM4A1AddToPlayer wiped it again the moment somebody picked the gun
+	up, handing the identity back to a per-player bool. So for the whole time
+	the weapon was actually held - the only time it matters - nothing on the
+	entity said what it was.
+
+	That is what let zp_extra_angelic_beast collide with it. Both plugins hook
+	weapon_m4a1, both kept a bool per player, and neither cleared the other's:
+	buying one then the other left both sets of hooks live on one weapon, so
+	the models fought and the clip came out wrong.
+
+	Keeping the stamp permanently fixes it and removes code rather than adding
+	any. An entity holds one key, so two plugins can never both claim it, and
+	neither needs to know the other exists. The identity now simply travels
+	with the gun - drop it and it is still a Frost M4A1 on the ground, and
+	whoever picks it up gets a Frost M4A1, which is what a dropped weapon
+	should do.
+
+	ak47_transformers_extra, zp_weapon_ak47_beast, zp_extra_bak47p and
+	zombie_plague40 all key off pev_impulse the same way.
+*/
+#define FROST_KEY                 1997
+#define Is_Frost(%0)              (pev_valid(%0) && pev(%0, pev_impulse) == FROST_KEY)
+#define OFF_WEAPON_PLAYER         41
+#define OFF_PLAYER_ACTIVE_ITEM   373
+#define LINUX_WEAPON               4
+#define LINUX_PLAYER               5
+
+new g_bIsFrozen[33]
 new g_iDmg[33]
 
 public plugin_init()
@@ -68,7 +101,9 @@ public plugin_init()
 	RegisterHam(Ham_TakeDamage, "player", "fw_TakeDamage")
 	RegisterHam(Ham_TraceAttack, "player", "TraceAttack", 1)
 	RegisterHam(Ham_TraceAttack, "worldspawn", "TraceAttack", 1)
-	RegisterHam(Ham_Item_AddToPlayer, "weapon_m4a1", "fw_FrostM4A1AddToPlayer")
+	// Ham_Item_AddToPlayer is no longer hooked: it existed only to convert the
+	// on-the-ground key back into a per-player bool on pickup. The key is
+	// permanent now, so picking the weapon up needs no special handling.
 	RegisterHam(Ham_Item_Deploy, "weapon_m4a1", "fw_M4A1_Deploy_Post", 1)   // added by setup: reapply custom model on every deploy
 }
 
@@ -95,13 +130,11 @@ public plugin_precache()
 
 public client_putinserver(id)
 {
-	g_bHasFrostM4A1[id] = false
 	g_bIsFrozen[id] = false
 }
 
 public client_disconnect(id)
 {
-	g_bHasFrostM4A1[id] = false
 	g_bIsFrozen[id] = false
 	RemoveEntity(id)
 }
@@ -110,10 +143,47 @@ public zp_extra_item_selected(player, itemid)
 {
 	if (itemid == g_iItemID) 
 	{
-		g_bHasFrostM4A1[player] = true
-		ham_strip_weapon(player, "weapon_m4a1")
+		/*
+			Drop the old M4A1 through the engine rather than stripping it.
+
+			ham_strip_weapon destroys the entity while m_pActiveItem still
+			points at it, leaving every later read of the player's weapon
+			state looking at something that no longer exists. The tell was
+			that dropping the gun with G and then buying worked, while buying
+			directly gave a Frost-looking rifle with none of the behaviour.
+			engclient_cmd "drop" is what G runs, so the purchase now takes the
+			path that already worked.
+		*/
+		if (FindOwnedM4A1(player))
+			engclient_cmd(player, "drop", "weapon_m4a1")
+
 		give_item(player, "weapon_m4a1")
+
+		// stamp the entity - this is what makes it a Frost M4A1 from here on.
+		// FindOwnedM4A1 matches on m_pPlayer rather than pev_owner, which
+		// reads 0 on a freshly deployed weapon.
+		new frostEnt = FindOwnedM4A1(player)
+
+		if (!frostEnt)
+			return
+
+		set_pev(frostEnt, pev_impulse, FROST_KEY)
+
+		// give_item deploys the weapon inside its own call, before the key was
+		// set, so that first deploy saw an unstamped entity and the model hook
+		// skipped it. Run deploy once more now that the key is readable.
+		ExecuteHamB(Ham_Item_Deploy, frostEnt)
+
 		cs_set_user_bpammo(player, CSW_M4A1, 90)
+
+		// one line per purchase - proves the key landed and that the
+		// player-side checks, which are what the damage and freeze code uses,
+		// agree with it. Not on any per-frame or per-shot path.
+		log_amx("[FROST] bought id=%d ent=%d keyed=%d holding=%d weapon=%d",
+			player, frostEnt,
+			Is_Frost(frostEnt) ? 1 : 0,
+			HoldingFrost(player) ? 1 : 0,
+			get_user_weapon(player))
 		new sName[32]
 		get_user_name(player, sName, 31)
 		set_hudmessage(random(255), random(255), random(255), -1.0, 0.17, 1, 0.0, 5.0, 1.0, 1.0, -1)
@@ -127,7 +197,7 @@ public TraceAttack(iEnt, iAttacker, Float:flDamage, Float:fDir[3], ptr, iDamageT
 	if(!is_user_alive(iAttacker))
 		return 
 	
-	if(get_user_weapon(iAttacker) != CSW_M4A1 || !g_bHasFrostM4A1[iAttacker])
+	if(!HoldingFrost(iAttacker))
 		return
 	
 	set_hudmessage(34, 138, 255, -1.0, 0.17, 1, 0.0, 2.0, 1.0, 1.0, -1)
@@ -142,15 +212,12 @@ public TraceAttack(iEnt, iAttacker, Float:flDamage, Float:fDir[3], ptr, iDamageT
 
 public zp_user_infected_post(infected, infector)
 {
-	if (g_bHasFrostM4A1[infected])
-	{
-		g_bHasFrostM4A1[infected] = false   // restored by setup: infection = you lose the weapon (ZP strips it anyway). Still kept across humanize/death/respawn/round.
-	}
+	// nothing to clear - ZP strips the weapon on infection and the identity
+	// goes with it
 }
 
 public zp_user_humanized_post(id)
 {
-	// g_bHasFrostM4A1[id] = false   // unified by setup: ownership survives infect/humanize/death/respawn/round; cleared only on connect, disconnect, drop
 	g_iDmg[id] = 0
 	RemoveEntity(id)
 }
@@ -159,7 +226,6 @@ public event_round_start()
 {
 	for (new i = 1; i <= g_iMaxPlayers; i++)
 	{
-		// g_bHasFrostM4A1[i] = false   // disabled by setup: every other weapon plugin keeps ownership across rounds; it is still cleared on infection / humanize / disconnect / drop
 		g_bIsFrozen[i] = false
 		g_iDmg[i] = 0
 		
@@ -186,7 +252,7 @@ public fw_TakeDamage(victim, inflictor, attacker, Float:damage, damage_type)
 	if(g_bIsFrozen[victim] && !get_pcvar_num(g_iDmgWhileFrozen))
 		return HAM_SUPERCEDE
 
-	if(g_bHasFrostM4A1[attacker] && (get_user_weapon(attacker) == CSW_M4A1))
+	if(HoldingFrost(attacker))
 		SetHamParamFloat(4, damage * get_pcvar_num(g_iDmgMultiplier))
 	
 	// For Frost Effect Ring
@@ -197,12 +263,12 @@ public fw_TakeDamage(victim, inflictor, attacker, Float:damage, damage_type)
 	static originF2[3] 
 	get_user_origin(victim, originF2)
 	
-	if((get_user_weapon(attacker) == CSW_M4A1) && g_bHasFrostM4A1[attacker])
+	if(HoldingFrost(attacker))
 	{
 		g_iDmg[attacker] += (floatround(damage) * get_pcvar_num(g_iDmgMultiplier))
 	}
 	
-	if((g_iDmg[attacker] >= get_pcvar_num(g_iFreezeDmg)) && (get_user_weapon(attacker) == CSW_M4A1) && g_bHasFrostM4A1[attacker])
+	if((g_iDmg[attacker] >= get_pcvar_num(g_iFreezeDmg)) && HoldingFrost(attacker))
 	{
 		new sName[32]
 		get_user_name(victim, sName, charsmax(sName))
@@ -231,7 +297,7 @@ public CheckModel(id)
 
 public CurrentWeapon(id)
 {
-	if ((get_user_weapon(id) == CSW_M4A1) && g_bHasFrostM4A1[id] == true)
+	if (HoldingFrost(id))
 	{
 		CheckModel(id)
 	}
@@ -470,6 +536,46 @@ stock ColorPrint(const id, const input[], any: ...)
 	}
 }
 
+/*
+	The player's M4A1 entity, matched on m_pPlayer. Deliberately not a
+	pev_owner scan: pev_owner reads 0 on a freshly deployed weapon, so a
+	search based on it silently finds nothing.
+*/
+FindOwnedM4A1(id)
+{
+	new ent = -1
+
+	while ((ent = engfunc(EngFunc_FindEntityByString, ent, "classname", "weapon_m4a1")) > 0)
+	{
+		if (get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON) == id)
+			return ent
+	}
+
+	return 0
+}
+
+/*
+	Does this player hold a Frost M4A1?
+
+	Deliberately the same m_pPlayer search the model hook already relies on,
+	rather than reading m_pActiveItem. m_pActiveItem was tried first and the
+	result was a Frost-looking rifle with none of the Frost behaviour: the
+	entity-side hook worked and every player-side one silently did not. Rather
+	than keep guessing at an offset, this reuses the lookup that is already
+	proven to work in this plugin.
+
+	The cost is an entity search, so callers on a hot path must cheap-test
+	first - get_user_weapon() is the usual guard. Nothing here runs per frame:
+	the callers are damage and trace events.
+*/
+bool:HoldingFrost(id)
+{
+	if (!is_user_alive(id) || get_user_weapon(id) != CSW_M4A1)
+		return false
+
+	return Is_Frost(FindOwnedM4A1(id))
+}
+
 stock ham_strip_weapon(id,weapon[])
 {
     if(!equal(weapon,"weapon_",7)) return 0
@@ -534,46 +640,25 @@ public fw_SetModel(entity, model[])
 	if(!equali(model, W_OLD_M4A1_MODEL)) 
 		return FMRES_IGNORED
 
-	new className[33]
-	entity_get_string(entity, EV_SZ_classname, className, 32)
-
-	static iOwner, iStoredM4A1ID
-
-	// Frost M4A1 Owner
-	iOwner = entity_get_edict(entity, EV_ENT_owner)
-
-	// Get drop weapon index (Frost M4A1) to use in fw_FrostM4A1AddToPlayer forward
+	// the weaponbox on the ground wraps the actual weapon entity, and that is
+	// what carries the key
+	static iStoredM4A1ID
 	iStoredM4A1ID = find_ent_by_owner(-1, "weapon_m4a1", entity)
 
-	// If Player Has Frost M4A1 and It's weapon_m4a1
-	if(g_bHasFrostM4A1[iOwner] && is_valid_ent(iStoredM4A1ID))
-	{
-		// Setting weapon options
-		entity_set_int(iStoredM4A1ID, EV_INT_impulse, 1997)
+	/*
+		Show the frost world model if the wrapped weapon is a Frost M4A1.
 
-		// Rest Var
-		g_bHasFrostM4A1[iOwner] = false
-		
-		// Set weaponbox new model
+		This used to stamp the key here and clear the owner's bool, with
+		fw_FrostM4A1AddToPlayer stamping it back on pickup - the key existed
+		only while the gun lay on the ground. It is permanent now, so there is
+		nothing to set and nothing to reset: the drop just needs drawing.
+	*/
+	if(Is_Frost(iStoredM4A1ID))
+	{
 		entity_set_model(entity, W_M4A1_MODEL)
 		return FMRES_SUPERCEDE
 	}
 	return FMRES_IGNORED
-}
-
-public fw_FrostM4A1AddToPlayer(FrostM4A1, id)
-{
-	// Make sure that this is M4A1
-	if(is_valid_ent(FrostM4A1) && is_user_connected(id) && entity_get_int(FrostM4A1, EV_INT_impulse) == 1997)
-	{
-		// Update Var
-		g_bHasFrostM4A1[id] = true
-
-		// Reset weapon options
-		entity_set_int(FrostM4A1, EV_INT_impulse, 0)
-		return HAM_HANDLED
-	}
-	return HAM_IGNORED
 }
 
 stock Remove_Rendering(id)
@@ -601,7 +686,7 @@ public fw_M4A1_Deploy_Post(iEnt)
 
 	new id = pev(iEnt, pev_owner)
 
-	if(!is_user_alive(id) || !g_bHasFrostM4A1[id])
+	if(!is_user_alive(id) || !Is_Frost(iEnt))
 		return
 
 	CheckModel(id)

@@ -187,10 +187,38 @@ new bool:g_bTraceMixed[33]
 #define OFF_WEAPON_IN_RELOAD      54
 #define OFF_WEAPON_ACCURACY       71
 #define OFF_PLAYER_NEXT_ATTACK    83
+#define OFF_PLAYER_ACTIVE_ITEM   373
 #define LINUX_WEAPON               4
 #define LINUX_PLAYER               5
 
-new bool:g_bHasAngelic[33]
+/*
+	Ownership lives on the weapon, not on the player.
+
+	The obvious shape - a bool per player saying "this one bought the Angelic"
+	- cannot answer the question that actually matters, because more than one
+	plugin claims weapon_m4a1. zp_frost_m4a1 does too. With a flag each and no
+	knowledge of one another, buying both leaves both flags set: every hook in
+	both plugins fires on the same weapon, the models overwrite each other and
+	the clip ends up whichever plugin enforces it hardest. Buying Angelic then
+	Frost gave a Frost-looking rifle with Angelic's 52-round clip.
+
+	Stamping the entity fixes it structurally rather than case by case. An
+	entity carries exactly one key, so two plugins can never both own it, and
+	neither has to know the other exists. Replacing the weapon replaces the
+	identity along with it. A third M4A1 item could be added tomorrow and
+	nothing here would need touching.
+
+	This is already the convention on this server - ak47_transformers_extra,
+	zp_weapon_ak47_beast, zp_extra_bak47p and zombie_plague40 itself all key
+	off pev_impulse. This plugin and zp_frost_m4a1 were the two that did not.
+
+	Consequence worth stating: the identity now travels with the gun. Drop it
+	and it is still an Angelic on the ground; whoever picks it up gets the
+	Angelic. That replaces the old "ownership is lost on drop" rule, and it is
+	the behaviour every other weapon in the game already has.
+*/
+#define ANGELIC_KEY          51415444783564
+#define Is_Angelic(%0)       (pev_valid(%0) && pev(%0, pev_impulse) == ANGELIC_KEY)
 new bool:g_bAwake[33]
 
 /*
@@ -337,9 +365,13 @@ public plugin_init()
 	g_iMaxPlayers = get_maxplayers()
 }
 
+/*
+	These reset per-player state only. There is no ownership left to clear:
+	the weapon carries that, and it goes away with the weapon - stripped on
+	infection, gone on disconnect, and simply not held any more once dropped.
+*/
 public client_connect(id)
 {
-	g_bHasAngelic[id] = false
 	g_bAwake[id] = false
 	g_bStabbing[id] = false
 	g_iShotsFired[id] = 0
@@ -348,7 +380,6 @@ public client_connect(id)
 
 public client_disconnected(id)
 {
-	g_bHasAngelic[id] = false
 	g_bAwake[id] = false
 	g_bStabbing[id] = false
 	g_iShotsFired[id] = 0
@@ -357,7 +388,6 @@ public client_disconnected(id)
 
 public zp_user_infected_post(id, infector)
 {
-	g_bHasAngelic[id] = false
 	g_bAwake[id] = false
 }
 
@@ -374,28 +404,74 @@ GiveAngelic(id)
 	if (!is_user_alive(id))
 		return
 
-	g_bHasAngelic[id] = true
+	/*
+		Drop the M4A1 already held, then hand over a fresh one.
+
+		The plugin used to reuse whatever M4A1 was in hand and lean on
+		engclient_cmd to force a redeploy. That only works when the player is
+		holding something else: CS ignores a select command for the weapon
+		already active, so no deploy fired and buying the item while holding a
+		plain M4A1 left the stock skin, draw and sound in place.
+
+		Removing the old weapon by hand - RetireWeapon, RemovePlayerItem,
+		Item_Kill, clear the pev_weapons bit - was tried and is worse. It
+		destroys the entity while m_pActiveItem still points at it, so every
+		read of the player's weapon state afterwards is looking at something
+		that no longer exists. The tell was that pressing G to drop the old
+		gun and then buying worked perfectly, while buying directly did not.
+
+		engclient_cmd "drop" runs the engine's own DropPlayerItem, which is
+		exactly what G does: it unhooks the active item, updates pev_weapons
+		and builds the weaponbox. Doing it this way means the purchase path
+		and the path that already worked are the same path.
+
+		The old gun lands on the floor as an ordinary M4A1, which is what it
+		is - the key that marks an Angelic goes on the new entity below.
+	*/
+	if (FindOwnedWeapon(id, "weapon_m4a1"))
+		engclient_cmd(id, "drop", "weapon_m4a1")
+
 	g_bAwake[id] = false
 
-	// reuse the M4A1 already in hand if there is one, otherwise hand one over.
-	// no stripping: the deploy hook skins whatever M4A1 the player ends up
-	// holding, so the entity itself does not need replacing
+	give_item(id, "weapon_m4a1")
+
 	new ent = FindOwnedWeapon(id, "weapon_m4a1")
 
 	if (!ent)
-	{
-		give_item(id, "weapon_m4a1")
-		ent = FindOwnedWeapon(id, "weapon_m4a1")
-	}
-
-	if (!ent)
-	{
-		g_bHasAngelic[id] = false
 		return
-	}
+
+	// this is what makes it an Angelic - everything else keys off it
+	set_pev(ent, pev_impulse, ANGELIC_KEY)
+
+	/*
+		Deploy again now that the key is on.
+
+		give_item() deploys the weapon inside its own call, which is before
+		this line, so the first deploy saw an unstamped entity and
+		Fw_Deploy_Post ignored it - stock model, stock draw, stock sound. The
+		identity has to be readable at the instant deploy runs, and the
+		cheapest way to guarantee that is to run deploy once more with it in
+		place. engclient_cmd below cannot do this: the weapon is already
+		active by then, and CS ignores a select command for the active weapon.
+	*/
+	ExecuteHamB(Ham_Item_Deploy, ent)
 
 	cs_set_weapon_ammo(ent, get_pcvar_num(g_pClip))
 	cs_set_user_bpammo(id, CSW_M4A1, get_pcvar_num(g_pAmmo))
+
+	/*
+		One line per purchase, read back from the weapon rather than echoing
+		what was just written - the point is to prove the key landed and the
+		identity checks agree, not to repeat the cvars. Safe to leave on: this
+		runs once when somebody buys, never per frame or per shot.
+	*/
+	if (get_pcvar_num(g_pDebug))
+		log_amx("[ANGELIC] bought id=%d ent=%d keyed=%d holding=%d clip=%d bpammo=%d",
+			id, ent,
+			Is_Angelic(ent) ? 1 : 0,
+			HoldingAngelic(id) ? 1 : 0,
+			get_pdata_int(ent, OFF_WEAPON_CLIP, LINUX_WEAPON),
+			cs_get_user_bpammo(id, CSW_M4A1))
 
 
 	// force a redeploy so the skin and draw animation land immediately
@@ -409,6 +485,31 @@ GiveAngelic(id)
 	on a freshly deployed weapon, so an owner search based on it silently
 	found nothing.
 */
+/*
+	Does this player hold an Angelic?
+
+	Deliberately the same m_pPlayer search FindOwnedWeapon does for everything
+	else here, rather than reading m_pActiveItem. m_pActiveItem was tried
+	first and produced a weapon that looked right and behaved like a stock
+	M4A1 - the entity-side hooks worked, every player-side one silently did
+	not. This reuses the lookup already proven on this server instead of
+	trusting an offset nothing here had exercised.
+
+	get_user_weapon() is checked first and it is not just an optimisation.
+	FM_UpdateClientData calls this once per player per frame, and an entity
+	search on that path is the same shape of mistake as a log_amx on the
+	firing path, which put this server's frame rate on the floor once already.
+	The cheap test throws out every frame the player is not holding an M4A1,
+	which is nearly all of them.
+*/
+bool:HoldingAngelic(id)
+{
+	if (!is_user_alive(id) || get_user_weapon(id) != CSW_M4A1)
+		return false
+
+	return Is_Angelic(FindOwnedWeapon(id, "weapon_m4a1"))
+}
+
 FindOwnedWeapon(id, const classname[])
 {
 	new ent = -1
@@ -434,7 +535,7 @@ public Fw_Deploy_Post(ent)
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
 
-	if (!is_user_alive(id) || !g_bHasAngelic[id])
+	if (!is_user_alive(id) || !Is_Angelic(ent))
 		return
 
 	set_pev(id, pev_viewmodel2, V_MODEL)
@@ -586,7 +687,7 @@ public Fw_Primary_Pre(ent)
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
 
-	if (!is_user_alive(id) || !g_bHasAngelic[id])
+	if (!is_user_alive(id) || !Is_Angelic(ent))
 		return HAM_IGNORED
 
 	// accuracy is stored on the weapon and grows as you hold the trigger -
@@ -608,7 +709,7 @@ public Fw_Primary_Post(ent)
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
 
-	if (!is_user_alive(id) || !g_bHasAngelic[id])
+	if (!is_user_alive(id) || !Is_Angelic(ent))
 		return HAM_IGNORED
 
 	if (cs_get_weapon_ammo(ent) <= 0)
@@ -690,7 +791,7 @@ public Fw_Secondary_Pre(ent)
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
 
-	if (!is_user_alive(id) || !g_bHasAngelic[id])
+	if (!is_user_alive(id) || !Is_Angelic(ent))
 		return HAM_IGNORED
 
 	Stab(id, ent)
@@ -871,7 +972,7 @@ public Fw_Reload_Pre(ent)
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
 
-	if (!is_user_alive(id) || !g_bHasAngelic[id])
+	if (!is_user_alive(id) || !Is_Angelic(ent))
 		return HAM_IGNORED
 
 	g_iTmpClip[id] = -1
@@ -897,7 +998,7 @@ public Fw_Reload_Post(ent)
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
 
-	if (!is_user_alive(id) || !g_bHasAngelic[id] || g_iTmpClip[id] == -1)
+	if (!is_user_alive(id) || !Is_Angelic(ent) || g_iTmpClip[id] == -1)
 		return HAM_IGNORED
 
 	// undo the 30 round refill CS just did; the real rounds arrive when the
@@ -935,7 +1036,7 @@ public Fw_ItemPostFrame(ent)
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
 
-	if (!is_user_alive(id) || !g_bHasAngelic[id])
+	if (!is_user_alive(id) || !Is_Angelic(ent))
 		return HAM_IGNORED
 
 	/*
@@ -984,7 +1085,7 @@ public Fw_ItemPostFrame(ent)
 */
 public Fw_UpdateClientData_Post(id, sendweapons, cd_handle)
 {
-	if (!is_user_alive(id) || !g_bHasAngelic[id])
+	if (!HoldingAngelic(id))
 		return FMRES_IGNORED
 
 	if (get_user_weapon(id) != CSW_M4A1)
@@ -1009,7 +1110,7 @@ public Fw_PrecacheEvent_Post(type, const name[])
 
 public Fw_TakeDamage_Pre(victim, inflictor, attacker, Float:damage, damagebits)
 {
-	if (attacker < 1 || attacker > g_iMaxPlayers || !g_bHasAngelic[attacker])
+	if (attacker < 1 || attacker > g_iMaxPlayers || !HoldingAngelic(attacker))
 		return HAM_IGNORED
 
 	if (get_user_weapon(attacker) != CSW_M4A1)
@@ -1034,7 +1135,7 @@ public Fw_PlaybackEvent(flags, invoker, eventid, Float:delay, Float:origin[3], F
 	if (eventid != g_iOrigFireEvent || !g_bInPrimaryAttack)
 		return FMRES_IGNORED
 
-	if (!(1 <= invoker <= g_iMaxPlayers) || !g_bHasAngelic[invoker])
+	if (!(1 <= invoker <= g_iMaxPlayers) || !HoldingAngelic(invoker))
 		return FMRES_IGNORED
 
 	/*
@@ -1052,16 +1153,20 @@ public Fw_PlaybackEvent(flags, invoker, eventid, Float:delay, Float:origin[3], F
 // dropped weapon keeps the custom world model, and ownership ends there
 public Fw_SetModel(ent, const model[])
 {
-	if (!pev_valid(ent) || !equal(model, W_STOCK))
+	if (!equal(model, W_STOCK))
 		return FMRES_IGNORED
 
-	new owner = pev(ent, pev_owner)
+	/*
+		ent here is the weaponbox the engine just built, not the weapon. The
+		box carries no identity of its own - the key is on the weapon_m4a1
+		entity it wraps, which is the one that will be handed to whoever picks
+		the box up. Asking the box directly is how the dropped gun ended up
+		wearing the stock world model.
+	*/
+	new weapon = find_ent_by_owner(-1, "weapon_m4a1", ent)
 
-	if (owner < 1 || owner > g_iMaxPlayers || !g_bHasAngelic[owner])
+	if (!Is_Angelic(weapon))
 		return FMRES_IGNORED
-
-	g_bHasAngelic[owner] = false
-	g_bAwake[owner] = false
 
 	engfunc(EngFunc_SetModel, ent, W_MODEL)
 
@@ -1074,7 +1179,7 @@ public Fw_SetModel(ent, const model[])
 */
 public Event_CurWeapon(id)
 {
-	if (!is_user_alive(id) || !g_bHasAngelic[id])
+	if (!HoldingAngelic(id))
 		return
 
 	if (get_user_weapon(id) != CSW_M4A1)
@@ -1114,7 +1219,7 @@ public Task_ClipIn(taskid)
 {
 	new id = taskid - TASK_CLIPIN
 
-	if (is_user_alive(id) && g_bHasAngelic[id])
+	if (HoldingAngelic(id))
 		emit_sound(id, CHAN_ITEM, SND_CLIPIN, VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
 }
 
@@ -1122,7 +1227,7 @@ public Task_Bolt(taskid)
 {
 	new id = taskid - TASK_BOLT
 
-	if (is_user_alive(id) && g_bHasAngelic[id])
+	if (HoldingAngelic(id))
 		emit_sound(id, CHAN_ITEM, SND_BLOWBACK, VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
 }
 
