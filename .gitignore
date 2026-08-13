@@ -14,6 +14,11 @@
 !/.gitignore
 !/docs/
 
+# scripts that operate on the game's own assets - see tools/ for why they exist
+!/tools/
+/tools/*
+!/tools/*.ps1
+
 # --- addons/amxmodx ---------------------------------------------------------
 !/addons/
 /addons/*
