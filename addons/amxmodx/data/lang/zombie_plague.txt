@@ -1,10 +1,10 @@
 [en]
 NOTICE_INFO1 = Press M to show the game menu
 NOTICE_INFO2 = Press , or . to purchase ammo
-NOTICE_VIRUS_FREE = The T-Virus has been set loose...
+NOTICE_VIRUS_FREE =
 NOTICE_FIRST = %s is the first zombie !!
-NOTICE_INFECT = %s's brains has been eaten...
-NOTICE_INFECT2 = %s's brains has been eaten by %s...
+NOTICE_INFECT =
+NOTICE_INFECT2 =
 NOTICE_ANTIDOTE = %s has used an antidote...
 NOTICE_NEMESIS = %s is a Nemesis !!!
 NOTICE_ASSASSIN = %s is a Assassin !!!
@@ -720,11 +720,11 @@ NOTICE_MULTI = Multiple Infektionen !!!
 NOTICE_PLAGUE = Plague Modus !!!
 
 WIN_HUMAN = Menschen besiegten die Seuche!
-WIN_ZOMBIE = Zombies haben die Welt übernommen!
+WIN_ZOMBIE = Zombies haben die Welt ï¿½bernommen!
 WIN_NO_ONE = Niemand hat gewonnen...
 
 CMD_INFECT = umgewandelt in einen Zombie
-CMD_DISINFECT = zurück gewandelt in einen Menschen
+CMD_DISINFECT = zurï¿½ck gewandelt in einen Menschen
 CMD_NEMESIS = umgewandelt in einen Nemesis
 CMD_SURVIVAL = umgewandelt in einen Survivor
 CMD_SWARM = starte Swarm Modus
@@ -776,23 +776,23 @@ MENU_BACK = Zurueck
 MENU_NEXT = Naechste
 MENU_EXIT = Ausgang
 
-MOTD_INFO11 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>%s %s von %s :</b> ist ein Counter-Strike Plugin welches unter AMX Mod X entwickelt wurde, wo Menschen und Zombies aufeinandertreffen. Es beruht auf dem klassischem Zombie Infection Mod: Bei jeder Runde wird ein beliebiger Spieler ausgewählt welcher dann der erste Zombie ist. Der erste Zombie hat als Aufgabe die anderen Spieler zu infizieren. 
-MOTD_INFO12 = Aber es gibt neue Besonderheiten und Erweiterungen. Zum Beispiel kannst du besondere Items kaufen (wie beispielsweise Waffen) im Tausch gegen Munitionspackungen. Du kannst Munitionspackungen kriegen indem du Zombies tötest oder Menschen infizierst.<br><br><br><u>Derzeitige Server-Einstellungen:</u><br>
-MOTD_INFO1_A = <br>Atmosphäre Effekte:
+MOTD_INFO11 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>%s %s von %s :</b> ist ein Counter-Strike Plugin welches unter AMX Mod X entwickelt wurde, wo Menschen und Zombies aufeinandertreffen. Es beruht auf dem klassischem Zombie Infection Mod: Bei jeder Runde wird ein beliebiger Spieler ausgewï¿½hlt welcher dann der erste Zombie ist. Der erste Zombie hat als Aufgabe die anderen Spieler zu infizieren. 
+MOTD_INFO12 = Aber es gibt neue Besonderheiten und Erweiterungen. Zum Beispiel kannst du besondere Items kaufen (wie beispielsweise Waffen) im Tausch gegen Munitionspackungen. Du kannst Munitionspackungen kriegen indem du Zombies tï¿½test oder Menschen infizierst.<br><br><br><u>Derzeitige Server-Einstellungen:</u><br>
+MOTD_INFO1_A = <br>Atmosphï¿½re Effekte:
 MOTD_INFO1_B = <br>Blitz Stufe: %s
-MOTD_INFO1_C = <br>Ausgelöste Lichter: %L
+MOTD_INFO1_C = <br>Ausgelï¿½ste Lichter: %L
 MOTD_INFO1_D = <br>Jeder Donnerschlag: %d sekunden
-MOTD_INFO1_E = <br>Türen: %L
+MOTD_INFO1_E = <br>Tï¿½ren: %L
 MOTD_INFO1_F = <br>Deathmatch: %L
 MOTD_INFO1_G = <br>Schutz nach Wiederbelebung: %d sekunden
 MOTD_INFO1_H = <br>Irgendwo Wiederbeleben: %L
 MOTD_INFO1_I = <br>Besondere Items: %L
 MOTD_INFO1_J = <br>Zombie Klassen: %L
-MOTD_INFO1_K = <br>Benutzerdefiniertes Nachtsichtgerät: %L
+MOTD_INFO1_K = <br>Benutzerdefiniertes Nachtsichtgerï¿½t: %L
 MOTD_INFO1_L = <br>Benutzerdefinierte Blendgranate: %L
-MOTD_INFO2 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Menschen:</b> Ihr Ziel ist es die Bedrohung durch Zombies zu unterdrücken. Sie haben eine große Auswahl von verschiedenen Waffen und können Blendgranaten bei dunklen Maps benutzen. Teamarbeit ist ein muss um zu überleben.<br><br><br><u>Derzeitige Server-Einstellungen:</u><br>
+MOTD_INFO2 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Menschen:</b> Ihr Ziel ist es die Bedrohung durch Zombies zu unterdrï¿½cken. Sie haben eine groï¿½e Auswahl von verschiedenen Waffen und kï¿½nnen Blendgranaten bei dunklen Maps benutzen. Teamarbeit ist ein muss um zu ï¿½berleben.<br><br><br><u>Derzeitige Server-Einstellungen:</u><br>
 MOTD_INFO2_A = <br>Gesundheit: %d
-MOTD_INFO2_B = <br>Gesundheits vergütung für den letzten Mensch: %d
+MOTD_INFO2_B = <br>Gesundheits vergï¿½tung fï¿½r den letzten Mensch: %d
 MOTD_INFO2_C = <br>Geschwindigkeit: %d
 MOTD_INFO2_D = <br>Gravitation: %d
 MOTD_INFO2_E = <br>Munition: %L
@@ -800,17 +800,17 @@ MOTD_INFO2_F = <br>Schaden um eine Munitionspackung zu bekommen: %d
 MOTD_INFO2_G = <br>Feuer Granaten: %L
 MOTD_INFO2_H = <br>Frost Granaten: %L
 MOTD_INFO2_I = <br>Leucht Granaten: %L
-MOTD_INFO2_J = <br>Rückschlag: %L
-MOTD_INFO3 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Zombies:</b> Ihr Ziel ist es jeden lebenden Menschen zu infizieren. Sie können im dunklen Sehen aber nur Nahkampfangriffe ausführen. Man kann zwischen 6 unterschiedlichen Zombie Klassen auswählen, jede hat ihre eigenen stärken und schwächen, aber alle fähig um ein Gehirn zu essen.<br><br><br><u>Derzeitige Server-Einstellungen:</u><br>
+MOTD_INFO2_J = <br>Rï¿½ckschlag: %L
+MOTD_INFO3 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Zombies:</b> Ihr Ziel ist es jeden lebenden Menschen zu infizieren. Sie kï¿½nnen im dunklen Sehen aber nur Nahkampfangriffe ausfï¿½hren. Man kann zwischen 6 unterschiedlichen Zombie Klassen auswï¿½hlen, jede hat ihre eigenen stï¿½rken und schwï¿½chen, aber alle fï¿½hig um ein Gehirn zu essen.<br><br><br><u>Derzeitige Server-Einstellungen:</u><br>
 MOTD_INFO3_A = <br>Zombie Gesundheit: %d
 MOTD_INFO3_B = <br>Erster Zombie Gesundheit: %d
-MOTD_INFO3_C = <br>Rüstung: %d%% schaden erhalten
+MOTD_INFO3_C = <br>Rï¿½stung: %d%% schaden erhalten
 MOTD_INFO3_D = <br>Geschwindigkeit: %d
 MOTD_INFO3_E = <br>Gravitation: %d
-MOTD_INFO3_F = <br>HP für Infektion: %d
+MOTD_INFO3_F = <br>HP fï¿½r Infektion: %d
 MOTD_INFO3_G = <br>Schmerz Schock frei: %L
 MOTD_INFO3_H = <br>Blutung: %L
-MOTD_INFO3_I = <br>Munitionspackung für Infektion: %d
+MOTD_INFO3_I = <br>Munitionspackung fï¿½r Infektion: %d
 MOTD_INFO4 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Mini-Spiele:</b> Es gibt 4 unterschiedliche spezial gameplay modi welche beliebig im Spielablauf auftreten.<br><br><br><u>Derzeitige Server-Einstellungen:</u><br>
 MOTD_INFO4_A = <br>Nemesis: %L
 MOTD_INFO4_B = <br>Nemesis Wahrscheinlichkeit: 1 in %d
@@ -863,8 +863,8 @@ CLASS_NEMESIS = Nemesis
 LAST_ZOMBIE_LEFT = Der letzte Zombie hat uns verlassen, %s ist der neue Zombie.
 LAST_HUMAN_LEFT = Der letzte Mensch hat uns verlassen, %s ist der neue Mensch.
 NOT_ENOUGH_AMMO = Du hast nicht genug Munitionspackungen.
-AMMO_BOUGHT = Du hast besondere Munition gekauft für deine Waffen. 
-ZOMBIE_SELECT = Bei dem nächsten Mal wird deine Zombie Klasse infiziert.
+AMMO_BOUGHT = Du hast besondere Munition gekauft fï¿½r deine Waffen. 
+ZOMBIE_SELECT = Bei dem nï¿½chsten Mal wird deine Zombie Klasse infiziert.
 BUY_ENABLED = Your buy menu has been re-enabled.
 AMMO_PACKS1 = Munitionspackungen:
 AMMO_PACKS2 = Munitionspackungen
@@ -1271,13 +1271,13 @@ MENU_BACK = Tilbage
 MENU_NEXT = Naeste
 MENU_EXIT = Luk
 
-MOTD_INFO11 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>%s %s af %s :</b> er et Counter-Strike plugin lavet under AMX Mod X, Hvor Mennesker og zombier er i krig mod hinanden. Det er baseret paa det klassiske zombie infection mod: I Hver runde bliver tilfaeldige spillere valgt til at vaere den første zombie som saa skal inficere de andre spillere. 
-MOTD_INFO12 = Men der er nogle nye ting og forbedringer. for eksempel, Kan du nu købe ekstra ting (som vaaben) ved hjaelp af ammo packs. Du kan faa ammo packs ved at draebe zombier eller inficere mennesker.<br><br><br><u>Aktuele server opsætning:</u><br>
+MOTD_INFO11 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>%s %s af %s :</b> er et Counter-Strike plugin lavet under AMX Mod X, Hvor Mennesker og zombier er i krig mod hinanden. Det er baseret paa det klassiske zombie infection mod: I Hver runde bliver tilfaeldige spillere valgt til at vaere den fï¿½rste zombie som saa skal inficere de andre spillere. 
+MOTD_INFO12 = Men der er nogle nye ting og forbedringer. for eksempel, Kan du nu kï¿½be ekstra ting (som vaaben) ved hjaelp af ammo packs. Du kan faa ammo packs ved at draebe zombier eller inficere mennesker.<br><br><br><u>Aktuele server opsï¿½tning:</u><br>
 MOTD_INFO1_A = <br>Ambience Effekter:
 MOTD_INFO1_B = <br>Lys niveau: %s
 MOTD_INFO1_C = <br>Aktiveret lys: %L
 MOTD_INFO1_D = <br>Thunderclaps hvert: %d seconds
-MOTD_INFO1_E = <br>Døre: %L
+MOTD_INFO1_E = <br>Dï¿½re: %L
 MOTD_INFO1_F = <br>Deathmatch: %L
 MOTD_INFO1_G = <br>Spawn beskyttelses Tid: %d seconds
 MOTD_INFO1_H = <br>tilfaeldig Spawning: %L
@@ -1285,9 +1285,9 @@ MOTD_INFO1_I = <br>Ekstra Ting: %L
 MOTD_INFO1_J = <br>Zombie Klasser: %L
 MOTD_INFO1_K = <br>brugerdefineret Nattesyn: %L
 MOTD_INFO1_L = <br>brugerdefineret Lommelygte: %L
-MOTD_INFO2 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Mennesket:</b> Deres mission er at skyde alle Zombier. De har et stort arsenal af våben de kan vaelge imellem, og bruger lommelygter i mørke baner. Samarbejde er et must for at overleve.<br><br><br><u>Aktuele server opsætninger:</u><br>
+MOTD_INFO2 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Mennesket:</b> Deres mission er at skyde alle Zombier. De har et stort arsenal af vï¿½ben de kan vaelge imellem, og bruger lommelygter i mï¿½rke baner. Samarbejde er et must for at overleve.<br><br><br><u>Aktuele server opsï¿½tninger:</u><br>
 MOTD_INFO2_A = <br>Liv: %d
-MOTD_INFO2_B = <br>Liv tildelt for at være sidste levende menneske: %d
+MOTD_INFO2_B = <br>Liv tildelt for at vï¿½re sidste levende menneske: %d
 MOTD_INFO2_C = <br>Fart: %d
 MOTD_INFO2_D = <br>Gravity: %d
 MOTD_INFO2_E = <br>ammunition: %L
@@ -1296,17 +1296,17 @@ MOTD_INFO2_G = <br>Ild Granader: %L
 MOTD_INFO2_H = <br>Frost Granader: %L
 MOTD_INFO2_I = <br>Lys Granader: %L
 MOTD_INFO2_J = <br>Knockback: %L
-MOTD_INFO3 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Zombier:</b> Deres mission er at inficere et hvert levende menneske. De kan se i mørke, men kan kun angribe med deres hænder. Der er 6 forskellige zombie klasser at vælge imellem, hver med deres egen styrke og svagheder, men alle i stand til at æde masser af hjerner.<br><br><br><u>Aktuele server opsætninger:</u><br>
+MOTD_INFO3 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Zombier:</b> Deres mission er at inficere et hvert levende menneske. De kan se i mï¿½rke, men kan kun angribe med deres hï¿½nder. Der er 6 forskellige zombie klasser at vï¿½lge imellem, hver med deres egen styrke og svagheder, men alle i stand til at ï¿½de masser af hjerner.<br><br><br><u>Aktuele server opsï¿½tninger:</u><br>
 MOTD_INFO3_A = <br>Zombie Liv: %d
-MOTD_INFO3_B = <br>Første Zombies Liv: %d
+MOTD_INFO3_B = <br>Fï¿½rste Zombies Liv: %d
 MOTD_INFO3_C = <br>Rustning: %d%% Skade modtaget
 MOTD_INFO3_D = <br>Fart: %d
 MOTD_INFO3_E = <br>Gravity: %d
 MOTD_INFO3_F = <br>Liv for Infektion: %d
 MOTD_INFO3_G = <br>Smerte ryste fri: %L
-MOTD_INFO3_H = <br>Bløder: %L
+MOTD_INFO3_H = <br>Blï¿½der: %L
 MOTD_INFO3_I = <br>Ammo Packs for Infektion: %d
-MOTD_INFO4 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Smaa-Spil:</b> Der er 4 forskellige smaa spil som tilfældigt kan komme mens man spiller.<br><br><br><u>Aktuele server opsætninger:</u><br>
+MOTD_INFO4 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Smaa-Spil:</b> Der er 4 forskellige smaa spil som tilfï¿½ldigt kan komme mens man spiller.<br><br><br><u>Aktuele server opsï¿½tninger:</u><br>
 MOTD_INFO4_A = <br>Nemesis: %L
 MOTD_INFO4_B = <br>Nemesis Chance: 1 in %d
 MOTD_INFO4_C = <br>Nemesis Liv: %s
@@ -1335,11 +1335,11 @@ MOTD_DISABLED = Slaaet fra
 MOTD_FOG = Taage
 MOTD_RAIN = Regn
 MOTD_SNOW = Sne
-MOTD_ROTATING = Rotations døre fjernet
-MOTD_DOORS = Alle døre er fjernet
+MOTD_ROTATING = Rotations dï¿½re fjernet
+MOTD_DOORS = Alle dï¿½re er fjernet
 MOTD_DM_HUMAN = Genoplev som menneske
 MOTD_DM_ZOMBIE = Genoplev som zombie
-MOTD_LIMITED = Begrænset
+MOTD_LIMITED = Begrï¿½nset
 MOTD_AMMO_BP = Uendelige genladninger
 MOTD_AMMO_CLIP = Uendelige skud 
 MOTD_LASTZOMBIE = Kun paa den sidste zombie
@@ -1369,8 +1369,8 @@ NOTICE_INFO1 = Appuyez sur M pour afficher le menu
 NOTICE_INFO2 = Presse, ou . pour acheter des munitions 
 NOTICE_VIRUS_FREE = Le Virus-T a ete libere...
 NOTICE_FIRST = %s est le premier zombie!!
-NOTICE_INFECT = %s's le cerveau a été mangee...
-NOTICE_ANTIDOTE = %s a utilisé un antidote...
+NOTICE_INFECT = %s's le cerveau a ï¿½tï¿½ mangee...
+NOTICE_ANTIDOTE = %s a utilisï¿½ un antidote...
 NOTICE_NEMESIS = %s est un Nemesis !!!
 NOTICE_SURVIVOR = %s est un survivant !!!
 NOTICE_SWARM = Swarm Mode !!!
@@ -1392,16 +1392,16 @@ CMD_RESPAWN = respawned
 CMD_NOT = Unavailable command.
 CMD_ZOMBIE_ONLY = This is only available to zombies.
 CMD_HUMAN_ONLY = This is only available to humans.
-CMD_NOT_STUCK = Vous n'êtes pas coincé.
-CMD_NOT_ACCESS = Vous n'avez pas accès.
+CMD_NOT_STUCK = Vous n'ï¿½tes pas coincï¿½.
+CMD_NOT_ACCESS = Vous n'avez pas accï¿½s.
 CMD_NOT_CANTUSE = Vous cant usage de ce droit.
-CMD_NOT_EXTRAS = Points supplémentaires sont désactivées.
-CMD_NOT_ZCLASSES = Zombie classes sont désactivées.
+CMD_NOT_EXTRAS = Points supplï¿½mentaires sont dï¿½sactivï¿½es.
+CMD_NOT_ZCLASSES = Zombie classes sont dï¿½sactivï¿½es.
 
 MENU_BUY = acheter des armes
 MENU_EXTRABUY = Acheter Extra items
 MENU_ZCLASS = Choisir la classe de zombie
-MENU_UNSTUCK = Débloquer
+MENU_UNSTUCK = Dï¿½bloquer
 MENU_ADMIN = admin menu
 MENU_INFO = Aide 
 MENU_SPECTATOR = Join Spectators
@@ -1434,7 +1434,7 @@ MENU_BACK = Retour
 MENU_NEXT = Suivant
 MENU_EXIT = Quitter 
 
-MOTD_INFO11 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>%s %s par %s: </b>est un Counter-Strike plugin developpe sous AMX Mod X , Où les humains et les zombies sont confrontes. Il est base sur le classique de l'infection par le mod zombie, à chaque tour un joueur au hasard est choisi pour être le premier zombie qui doit infecter tout le monde.
+MOTD_INFO11 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>%s %s par %s: </b>est un Counter-Strike plugin developpe sous AMX Mod X , Oï¿½ les humains et les zombies sont confrontes. Il est base sur le classique de l'infection par le mod zombie, ï¿½ chaque tour un joueur au hasard est choisi pour ï¿½tre le premier zombie qui doit infecter tout le monde.
 MOTD_INFO12 = Mais il existe de nouvelles fonctionnalites et ameliorations. Par exemple, vous pouvez acheter des articles supplementaires (comme les armes) en echange de paquets de munitions. Vous pouvez obtenir des paquets de munitions en tuant des zombies / infecter l'homme. <br><br><br><u>Actuelle des parametres du serveur:</u><br>
 MOTD_INFO1_A = <br>Ambience Effects:
 MOTD_INFO1_B = <br>Lightning Level: %s
@@ -1448,7 +1448,7 @@ MOTD_INFO1_I = <br>Extra Items: %L
 MOTD_INFO1_J = <br>Zombie Classes: %L
 MOTD_INFO1_K = <br>Custom Nightvision: %L
 MOTD_INFO1_L = <br>Custom Flashlight: %L
-MOTD_INFO2 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>humains: </b>leur objectif est d'éliminer toute menace zombie. Ils ont un grand arsenal d'armes de choix, et l'utilisation des lampes de poche sur la tombée de la nuit cartes. Le travail en équipe est une nécessité pour survivre.<br><br><br><u>parametres actuelle du serveur:</u><br>
+MOTD_INFO2 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>humains: </b>leur objectif est d'ï¿½liminer toute menace zombie. Ils ont un grand arsenal d'armes de choix, et l'utilisation des lampes de poche sur la tombï¿½e de la nuit cartes. Le travail en ï¿½quipe est une nï¿½cessitï¿½ pour survivre.<br><br><br><u>parametres actuelle du serveur:</u><br>
 MOTD_INFO2_A = <br>Health: %d
 MOTD_INFO2_B = <br>Health Reward for Last Human: %d
 MOTD_INFO2_C = <br>Speed: %d
@@ -1459,7 +1459,7 @@ MOTD_INFO2_G = <br>Fire Grenades: %L
 MOTD_INFO2_H = <br>Frost Grenades: %L
 MOTD_INFO2_I = <br>Flare Grenades: %L
 MOTD_INFO2_J = <br>Knockback: %L
-MOTD_INFO3 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Zombies:</b>leur objectif est d'infecter chaque vie humaine. Ils sont capables de voir dans l'obscurité, mais ne peut attaque de mêlée. Il ya 6 classes différentes de zombies à choisir, chacun avec ses propres forces et faiblesses, mais tous capables de manger les cerveaux.<br><br><br><u>paramètres actuelle du serveur:</u><br>
+MOTD_INFO3 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Zombies:</b>leur objectif est d'infecter chaque vie humaine. Ils sont capables de voir dans l'obscuritï¿½, mais ne peut attaque de mï¿½lï¿½e. Il ya 6 classes diffï¿½rentes de zombies ï¿½ choisir, chacun avec ses propres forces et faiblesses, mais tous capables de manger les cerveaux.<br><br><br><u>paramï¿½tres actuelle du serveur:</u><br>
 MOTD_INFO3_A = <br>Zombie Health: %d
 MOTD_INFO3_B = <br>First Zombie Health: %d
 MOTD_INFO3_C = <br>Armor: %d%% damage taken
@@ -1469,7 +1469,7 @@ MOTD_INFO3_F = <br>HP for Infection: %d
 MOTD_INFO3_G = <br>Pain Shock Free: %L
 MOTD_INFO3_H = <br>Bleeding: %L
 MOTD_INFO3_I = <br>Ammo Packs for Infection: %d
-MOTD_INFO4 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Mini-Games:</b> Il ya 4 différents modes de jeu spéciaux que se produisent de façon aléatoire mai au cours de la partie.<br><br><br><u> parametres actuelle du serveur:</u><br>
+MOTD_INFO4 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>Mini-Games:</b> Il ya 4 diffï¿½rents modes de jeu spï¿½ciaux que se produisent de faï¿½on alï¿½atoire mai au cours de la partie.<br><br><br><u> parametres actuelle du serveur:</u><br>
 MOTD_INFO4_A = <br>Nemesis: %L
 MOTD_INFO4_B = <br>Nemesis Chance: 1 in %d
 MOTD_INFO4_C = <br>Nemesis Health: %s
@@ -1521,7 +1521,7 @@ CLASS_NEMESIS = Nemesis
 LAST_ZOMBIE_LEFT = Le dernier zombie est partie, %s est le nouveau zombie.
 LAST_HUMAN_LEFT = Le dernier Humain est partie, %s est le nouvel Humain.
 NOT_ENOUGH_AMMO = Vous n'avez pas assez de paquets de munitions.
-AMMO_BOUGHT = Vous avez acheté des munitions supplémentaires pour vos armes.
+AMMO_BOUGHT = Vous avez achetï¿½ des munitions supplï¿½mentaires pour vos armes.
 ZOMBIE_SELECT = Votre class de zombie serat effective a la prochaine infection
 AMMO_PACKS1 = Ammo packs:
 AMMO_PACKS2 = munitions packs
@@ -1599,7 +1599,7 @@ MENU_NEXT = Urmatorul
 MENU_EXIT = Iesire
 
 MOTD_INFO11 = <meta charset=UTF-8><body bgcolor=\"#000000\"><font color=\"#FF0505\"><b>%s %s de %s:</b> este un plugin de Counter-Strike, elaborat in conformitate cu AMX Mod X, unde oamenii si zombie se confrunta. Se bazeaza pe modul clasic de Zombie Infection: In fiecare runda un jucator aleator este ales pentru a fi primul zombie care va trebui sa infecteze restul oamenilor
-MOTD_INFO12 = Sunt si caracteristici noi si imbunatatiri. De exemplu, aveti posibilitatea de a cumpara elemente extra (cum ar fi arme) în schimbul pachetelor de munitie. Aveti posibilitatea sa obtineti pachete de munitie prin a rani/omori un zombie sau prin infectarea unui om <br> <br> <br> <u> Setarile curente ale serverului:</u><br>
+MOTD_INFO12 = Sunt si caracteristici noi si imbunatatiri. De exemplu, aveti posibilitatea de a cumpara elemente extra (cum ar fi arme) ï¿½n schimbul pachetelor de munitie. Aveti posibilitatea sa obtineti pachete de munitie prin a rani/omori un zombie sau prin infectarea unui om <br> <br> <br> <u> Setarile curente ale serverului:</u><br>
 MOTD_INFO1_A = <br>Efecte Atmosfera:
 MOTD_INFO1_B = <br>Nivel Lumina: %s
 MOTD_INFO1_C = <br>Declansare Lumini: %L
@@ -1859,7 +1859,7 @@ SPECTATING = Sledujes Hrace:
 
 [sk]
 NOTICE_INFO1 = Stlac "M" na zobrazenie ponuky.
-NOTICE_INFO2 = Stlac . alebo , pre nakupenie nábojov.
+NOTICE_INFO2 = Stlac . alebo , pre nakupenie nï¿½bojov.
 NOTICE_VIRUS_FREE = T-Virus vypusteny.
 NOTICE_FIRST = %s je prvy Zombie !
 NOTICE_INFECT = %s bol nakazeny.
@@ -2237,7 +2237,7 @@ MENU_EXTRA_TITLE = Extra Spullen
 MENU_ADMIN_TITLE = Admin Menu
 MENU_INFO_TITLE = Plugin Informatie
 
-MENU_EXTRA1 = Nachtkijker (één ronde)
+MENU_EXTRA1 = Nachtkijker (ï¿½ï¿½n ronde)
 MENU_EXTRA2 = T-Virus Tegengif
 MENU_EXTRA3 = Zombie Gekte
 MENU_EXTRA4 = Infectie Bom
