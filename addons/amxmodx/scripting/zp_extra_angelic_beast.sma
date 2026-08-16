@@ -70,6 +70,20 @@
 #include <fun>          // give_item
 #include <xs>
 #include <zombieplague>
+/*
+	reapi is a HARD dependency from here on, like zp_round_rules - there is no
+	#if defined guard, so this plugin will not load without the module. modules.ini
+	has reapi enabled.
+
+	It is here for the one CrossFire number that could never be ported: bullet
+	spread. The Prism Beast controls it with moderator 0.5 and resetTime 0.3, an
+	accuracy-recovery model CS has no equivalent for - CS bakes the cone into each
+	weapon's own fire code, computed from m_flAccuracy, and the only lever from
+	outside is to pin that value. Which this has been doing, and which has never
+	been shown to move anything. ReGameDLL exposes the call that uses the cone, so
+	the cone itself becomes editable.
+*/
+#include <reapi>
 
 #define PLUGIN  "[ZP] Extra Item: M4A1-S Angelic Beast"
 #define VERSION "1.0"
@@ -88,15 +102,32 @@ new const SND_CLIPOUT[]  = "angelic/clipout.wav"
 new const SND_BLOWBACK[] = "angelic/blowback.wav"
 
 /*
-	The wiki lists this gun with Ultra-Fast Reload, so the reload is cut short
-	of the animation's full 3.08s. The two sound beats are expressed as
-	fractions of whatever the reload time is set to, so they stay lined up if
-	that number is changed.
+	A reload is three beats - magazine out, magazine in, bolt - and each is
+	expressed as a fraction of whatever zp_angelic_reload_time is set to, so
+	they stay lined up if that number is changed.
+
+	The fractions are not tuned by ear. The model carries the animator's own
+	studio events, id 5004 with a frame number, and
+
+	    fraction = event frame / sequence frame count
+
+	makes fraction * reload_time land exactly on the event's own time, given
+	the sequence has been re-timed so that frames/fps equals the reload time -
+	which is the case here, 160 frames at 76.19 fps = 2.1s.
+
+	The bolt needs one fraction per animation. Both reloads pull and seat the
+	magazine on frames 20 and 60, but seq 4 blows the bolt back on frame 116
+	and seq 11 on frame 106, 131ms apart, so any single constant is right for
+	one of them and wrong for the other. That was the defect: 0.71 for both put
+	seq 4 within 31ms and left seq 11 100ms late. Note this is the opposite way
+	round from what docs/2026-08-16-handoff.md recorded by ear.
+
+	tools/check_reload_timing.ps1 reads the events back out of the model and
+	compares them against these cvars, so they cannot drift apart unnoticed.
 */
-#define TASK_CLIPIN 7100
-#define TASK_BOLT   7200
-#define FRAC_CLIPIN 0.39
-#define FRAC_BOLT   0.71
+#define TASK_CLIPOUT 7000
+#define TASK_CLIPIN  7100
+#define TASK_BOLT    7200
 
 // bullet holes come from the fire event, which is blocked to kill the stock
 // report - so they have to be drawn by hand
@@ -111,9 +142,27 @@ new bool:g_bDecalsOk
 #define ANIM_STAB   6
 #define ANIM_AWAKE_OFFSET 7
 
-#define STAB_DELAY  0.85
+/*
+	The stab lockout is a cvar now, and 0.85 was too long.
 
-// the model's reload runs 160 frames at 52 fps
+	Measured off v_angelic.mdl: sequence 6 "knife-attack" is 67 frames at 100 fps =
+	0.670s. The 0.85 this used to hold came from CrossFire's Born Beast variant
+	(intervalTime 0.070|0.85), not the Prism Beast the rest of this gun is matched
+	to - that one's melee cooldown is 0.55. So the gun sat locked for 180ms after
+	the hands were already back on it, with BOTH mouse buttons dead, which at 3.5m
+	is long enough for the next zombie to reach you.
+
+	0.55 is not available here: it is shorter than the animation, and cutting the
+	stab off is the defect the reload work was undone by. The animation length is
+	the floor, so 0.67. The Iron Beast's own stab is shorter and does get 0.55.
+
+	If the model is ever re-timed this has to follow it, the same way
+	zp_angelic_reload_time does.
+*/
+
+// what the reload ran at before it was re-timed: 160 frames at 52 fps. The
+// sequences are 76.19 fps now so those same frames finish on
+// zp_angelic_reload_time's 2.1s. Unused, kept as the record of the original.
 #define RELOAD_TIME 3.08
 
 /*
@@ -238,6 +287,10 @@ new Float:g_fPushAngle[33][3]
 new g_iFireIndex[33]
 new bool:g_bInPrimaryAttack
 
+// true only for the window inside the original PrimaryAttack where the bullet
+// traces run, so Fw_TraceAttack can test it instead of searching for the weapon
+new bool:g_bFiringAngelic[33]
+
 // reload bookkeeping: CS refills to the M4A1's own 30 round cap, so the real
 // clip has to be rebuilt afterwards from values captured before it ran
 new g_iTmpClip[33]   // clip captured before CS refills it, -1 = no reload running
@@ -254,7 +307,8 @@ new g_iOrigFireEvent
 
 new g_iItemId, g_iMaxPlayers
 new g_pDmg, g_pClip, g_pAmmo, g_pStabDmg, g_pStabRange, g_pRecoil, g_pSpeed, g_pThreshold, g_pReloadTime, g_pDecals, g_pAwakenMsg
-new g_pDebug, g_pRecoilMode, g_pInterval, g_pDeployTime
+new g_pDebug, g_pRecoilMode, g_pInterval, g_pDeployTime, g_pDecalReal, g_pStabDelay, g_pSpreadScale
+new g_pFracClipOut, g_pFracClipIn, g_pFracBolt, g_pFracBoltAlt
 
 public plugin_precache()
 {
@@ -332,10 +386,41 @@ public plugin_init()
 	g_pThreshold = register_cvar("zp_angelic_threshold", "0.30")
 	g_pReloadTime = register_cvar("zp_angelic_reload_time", "2.1")   // wiki: Ultra-Fast Reload
 
+	// Where the three reload sounds sit, as fractions of the reload time. Read
+	// straight off the model's studio events - see the note beside TASK_CLIPOUT.
+	// The sound files need no transient correction: measured, every one of them
+	// has its onset inside its first 0.02s and its peak by 0.05s.
+	g_pFracClipOut = register_cvar("zp_angelic_frac_clipout",  "0.125")    // frame 20 of 160, both animations
+	g_pFracClipIn  = register_cvar("zp_angelic_frac_clipin",   "0.375")    // frame 60 of 160, both animations
+	g_pFracBolt    = register_cvar("zp_angelic_frac_bolt",     "0.725")    // seq 4,  frame 116 of 160
+	g_pFracBoltAlt = register_cvar("zp_angelic_frac_bolt_alt", "0.6625")   // seq 11, frame 106 of 160
+
 	// verified in game: the five {bigshot decals resolve to 199-203 and draw
 	// without upsetting the client. plugin_precache still checks them and
 	// disables the whole thing if any comes back <= 0.
 	g_pDecals = register_cvar("zp_angelic_decals", "1")
+
+	// 1 = a hole at each real impact, spread and all
+	// 0 = the old single hole on the crosshair, which flattered the gun
+	g_pDecalReal = register_cvar("zp_angelic_decal_real", "1")
+
+	// seconds both mouse buttons stay locked after a stab - see the note beside
+	// ANIM_STAB. 0.67 is the measured length of sequence 6.
+	g_pStabDelay = register_cvar("zp_angelic_stab_delay", "0.67")
+
+	/*
+		Bullet cone multiplier. 1.0 leaves the M4A1's own spread alone.
+
+		This is a real percentage on the cone the engine is about to fire with, so
+		unlike zp_angelic_accuracy_cap-style levers it does not depend on
+		m_flAccuracy being reachable at all.
+	*/
+	g_pSpreadScale = register_cvar("zp_angelic_spread_scale", "0.5")
+
+	// checked, because a hook that silently fails to attach would leave a cvar in
+	// the config doing nothing - the exact trap the accuracy pin turned out to be
+	if (!RegisterHookChain(RG_CBaseEntity_FireBullets3, "Fw_FireBullets3_Pre", false))
+		log_amx("[ANGELIC] RegisterHookChain(FireBullets3) FAILED - zp_angelic_spread_scale will do nothing")
 
 	g_pAwakenMsg = register_cvar("zp_angelic_awaken_msg", "1")
 
@@ -354,6 +439,45 @@ public plugin_init()
 	RegisterHam(Ham_Weapon_Reload,          "weapon_m4a1", "Fw_Reload_Post",    1)
 	RegisterHam(Ham_Item_PostFrame,         "weapon_m4a1", "Fw_ItemPostFrame",  0)
 	RegisterHam(Ham_TakeDamage,             "player",      "Fw_TakeDamage_Pre", 0)
+
+	/*
+		Real bullet holes.
+
+		DrawBulletHole below stamps ONE hole straight down v_angle with no spread
+		applied, so it marks where the player aimed rather than where the round
+		went. That is what made this gun read as pinpoint accurate, and it is why
+		clamping m_flAccuracy appeared to work - nobody could see the difference,
+		because the holes never showed the spread in the first place.
+
+		These hooks draw at the real trace endpoints instead. The fire event is
+		blocked for this weapon, so there are no client-side holes to double up
+		with and this is the only set.
+	*/
+	/*
+		The classname list is not guesswork. DrawBulletHole marked anything solid
+		it traced into, so replacing it with per-classname hooks can only lose
+		coverage - I grepped the entity lumps of all 20 zm_cf_*.bsp on this server
+		for solid brush entities and got:
+
+		    func_wall 286, func_illusionary 137, func_breakable 59,
+		    func_conveyor 27, func_buyzone 16, func_wall_toggle 9, func_water 8,
+		    func_ladder 7, func_bomb_target 3, func_rotating 1, func_door 1
+
+		func_conveyor and func_wall_toggle were the two solid ones missing. The
+		rest of that list is deliberately not hooked: illusionary, buyzone, ladder
+		and bomb_target are non-solid, so a bullet never traces against them, and
+		water takes no decal. func_plat and func_door_rotating appear in none of
+		these maps but are kept for maps added later.
+	*/
+	RegisterHam(Ham_TraceAttack, "worldspawn",         "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_breakable",     "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_wall",          "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_wall_toggle",   "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_conveyor",      "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_door",          "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_door_rotating", "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_plat",          "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_rotating",      "Fw_TraceAttack", 1)
 
 	register_forward(FM_SetModel,      "Fw_SetModel")
 	register_forward(FM_PlaybackEvent, "Fw_PlaybackEvent")
@@ -427,9 +551,16 @@ GiveAngelic(id)
 
 		The old gun lands on the floor as an ordinary M4A1, which is what it
 		is - the key that marks an Angelic goes on the new entity below.
+
+		Widened from "drop weapon_m4a1" to "drop every primary". Dropping only
+		this gun's own base weapon is correct right up until the player is holding
+		an extra item built on a DIFFERENT base - cso_at15hw is a galil,
+		Scar_Born_Beast a ump45, yt_weapon_balrogm4_0 an m249. There is no m4a1 to
+		drop in that case, give_item hands over a second primary, and the player
+		walks away carrying two guns. give_item does not enforce the one-primary
+		rule the buy menu does.
 	*/
-	if (FindOwnedWeapon(id, "weapon_m4a1"))
-		engclient_cmd(id, "drop", "weapon_m4a1")
+	DropPrimaries(id)
 
 	g_bAwake[id] = false
 
@@ -508,6 +639,36 @@ bool:HoldingAngelic(id)
 		return false
 
 	return Is_Angelic(FindOwnedWeapon(id, "weapon_m4a1"))
+}
+
+/*
+	Drop every primary the player is carrying, by the same route G does.
+
+	The mask is CS's own primary set, matching the one zombie_plague40 and
+	cso_at15hw already use. get_user_weapons is read once and the list is walked -
+	dropping changes pev_weapons, but the local copy was taken before that, so a
+	player somehow holding two primaries loses both.
+*/
+#define PRIMARY_WEAPONS_BIT_SUM (\
+	(1<<CSW_SCOUT)|(1<<CSW_XM1014)|(1<<CSW_MAC10)|(1<<CSW_AUG)|(1<<CSW_UMP45)|\
+	(1<<CSW_SG550)|(1<<CSW_GALIL)|(1<<CSW_FAMAS)|(1<<CSW_AWP)|(1<<CSW_MP5NAVY)|\
+	(1<<CSW_M249)|(1<<CSW_M3)|(1<<CSW_M4A1)|(1<<CSW_TMP)|(1<<CSW_G3SG1)|\
+	(1<<CSW_SG552)|(1<<CSW_AK47)|(1<<CSW_P90))
+
+DropPrimaries(id)
+{
+	static weapons[32], num, wname[32]
+	num = 0
+	get_user_weapons(id, weapons, num)
+
+	for (new i = 0; i < num; i++)
+	{
+		if (!((1 << weapons[i]) & PRIMARY_WEAPONS_BIT_SUM))
+			continue
+
+		get_weaponname(weapons[i], wname, charsmax(wname))
+		engclient_cmd(id, "drop", wname)
+	}
 }
 
 FindOwnedWeapon(id, const classname[])
@@ -697,6 +858,19 @@ public Fw_Primary_Pre(ent)
 	g_bInPrimaryAttack = true
 	pev(id, pev_punchangle, g_fPushAngle[id])
 
+	/*
+		Set here so Fw_TraceAttack does not have to ask HoldingAngelic.
+
+		The bullet traces run inside the original PrimaryAttack, between this hook
+		and the post one, so this flag is live for exactly the window TraceAttack
+		fires in. HoldingAngelic is cheap only because get_user_weapon throws out
+		the frames where no M4A1 is held - on the firing path that test always
+		passes, so what is left is FindOwnedWeapon walking the edict array once per
+		bullet. That is the mistake the note above HoldingAngelic was written to
+		forbid, and it would have run for every M4A1 holder on the server.
+	*/
+	g_bFiringAngelic[id] = true
+
 	return HAM_IGNORED
 }
 
@@ -708,6 +882,11 @@ public Fw_Primary_Post(ent)
 		return HAM_IGNORED
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
+
+	// closed before any of the early returns below, so an empty-clip trigger pull
+	// cannot leave the window open into the next player's bullets
+	if (id >= 1 && id <= g_iMaxPlayers)
+		g_bFiringAngelic[id] = false
 
 	if (!is_user_alive(id) || !Is_Angelic(ent))
 		return HAM_IGNORED
@@ -818,9 +997,11 @@ Stab(id, ent)
 			g_bAwake[id] ? ANIM_STAB + ANIM_AWAKE_OFFSET : ANIM_STAB,
 			pev(id, pev_weaponanim))
 
-	set_pdata_float(ent, OFF_WEAPON_NEXT_PRIMARY,   STAB_DELAY, LINUX_WEAPON)
-	set_pdata_float(ent, OFF_WEAPON_NEXT_SECONDARY, STAB_DELAY, LINUX_WEAPON)
-	set_pdata_float(id,  OFF_PLAYER_NEXT_ATTACK,    STAB_DELAY, LINUX_PLAYER)
+	new Float:stabDelay = get_pcvar_float(g_pStabDelay)
+
+	set_pdata_float(ent, OFF_WEAPON_NEXT_PRIMARY,   stabDelay, LINUX_WEAPON)
+	set_pdata_float(ent, OFF_WEAPON_NEXT_SECONDARY, stabDelay, LINUX_WEAPON)
+	set_pdata_float(id,  OFF_PLAYER_NEXT_ATTACK,    stabDelay, LINUX_PLAYER)
 
 	static Float:start[3], Float:view[3], Float:angles[3], Float:fwd[3], Float:reach[3], Float:dest[3]
 
@@ -1016,13 +1197,24 @@ public Fw_Reload_Post(ent)
 	new anim = g_bAltReload[id] ? ANIM_RELOAD + ANIM_AWAKE_OFFSET : ANIM_RELOAD
 	SetAnimExact(id, anim)
 
-	// a reload is three beats, not one: mag out, mag in, bolt
-	emit_sound(id, CHAN_ITEM, SND_CLIPOUT, VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+	// A reload is three beats, not one: mag out, mag in, bolt - and none of them
+	// is at t=0, since the hands do not reach the magazine until frame 20. So
+	// all three are scheduled, the first one included.
+	//
+	// The bolt fraction has to follow the animation that was just chosen above,
+	// because the two do not blow the bolt back on the same frame.
+	new Float:fracOut  = get_pcvar_float(g_pFracClipOut)
+	new Float:fracBolt = get_pcvar_float(g_bAltReload[id] ? g_pFracBoltAlt : g_pFracBolt)
 
-	remove_task(TASK_CLIPIN + id)
-	remove_task(TASK_BOLT + id)
-	set_task(reload * FRAC_CLIPIN, "Task_ClipIn", TASK_CLIPIN + id)
-	set_task(reload * FRAC_BOLT,   "Task_Bolt",   TASK_BOLT + id)
+	// ScheduleBeat clears each task itself, so the three remove_task calls that
+	// used to sit here are gone rather than duplicated.
+	//
+	// All three go through the same guard. It was written for the mag-out beat
+	// only, which left the other two handing a possibly-zero delay straight to
+	// set_task - the exact trap the guard exists to avoid.
+	ScheduleBeat(id, reload * fracOut,                            "Task_ClipOut", TASK_CLIPOUT + id, SND_CLIPOUT)
+	ScheduleBeat(id, reload * get_pcvar_float(g_pFracClipIn),     "Task_ClipIn",  TASK_CLIPIN  + id, SND_CLIPIN)
+	ScheduleBeat(id, reload * fracBolt,                           "Task_Bolt",    TASK_BOLT    + id, SND_BLOWBACK)
 
 	return HAM_IGNORED
 }
@@ -1061,6 +1253,22 @@ public Fw_ItemPostFrame(ent)
 	new clip = get_pdata_int(ent, OFF_WEAPON_CLIP, LINUX_WEAPON)
 	new bp   = cs_get_user_bpammo(id, CSW_M4A1)
 	new need = min(get_pcvar_num(g_pClip) - clip, bp)
+
+	/*
+		A negative need mints ammo.
+
+		Lower zp_angelic_clip while a fuller magazine is already loaded and the
+		subtraction goes negative - then clip + need takes rounds OUT of the
+		magazine while bp - need puts them INTO the reserve, and the reserve grows
+		every time the player reloads. Both cvars are live-tunable, so this is a
+		reachable state and not a theoretical one.
+
+		Clamped rather than returned early: the IN_RELOAD flag below still has to be
+		cleared or the weapon stays stuck mid-reload for good. At need 0 the two
+		writes are no-ops and only that flag changes.
+	*/
+	if (need < 0)
+		need = 0
 
 	set_pdata_int(ent, OFF_WEAPON_CLIP, clip + need, LINUX_WEAPON)
 	cs_set_user_bpammo(id, CSW_M4A1, bp - need)
@@ -1215,6 +1423,31 @@ public Event_CurWeapon(id)
 	set_pev(id, pev_maxspeed, awake ? base * get_pcvar_float(g_pSpeed) : base)
 }
 
+/*
+	One reload beat: cancel any pending copy, then either play it now or schedule it.
+
+	A fraction of zero has to be emitted immediately rather than scheduled, because
+	set_task will not honour a delay of 0.0 - the sound arrives late or not at all.
+	Every beat needs that guard, not just the first one.
+*/
+ScheduleBeat(id, Float:delay, const func[], taskid, const sound[])
+{
+	remove_task(taskid)
+
+	if (delay <= 0.0)
+		emit_sound(id, CHAN_ITEM, sound, VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+	else
+		set_task(delay, func, taskid)
+}
+
+public Task_ClipOut(taskid)
+{
+	new id = taskid - TASK_CLIPOUT
+
+	if (HoldingAngelic(id))
+		emit_sound(id, CHAN_ITEM, SND_CLIPOUT, VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+}
+
 public Task_ClipIn(taskid)
 {
 	new id = taskid - TASK_CLIPIN
@@ -1231,8 +1464,80 @@ public Task_Bolt(taskid)
 		emit_sound(id, CHAN_ITEM, SND_BLOWBACK, VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
 }
 
+/*
+	Scale the bullet cone, in the one place the engine actually uses it.
+
+	Params, from reapi_gamedll_const.inc, 1-based and counting pEntity:
+
+	    1 pEntity  2 vecSrc  3 vecDirShooting  4 vecSpread  5 flDistance
+	    6 iPenetration  7 iBulletType  8 iDamage  9 flRangeModifier
+	    10 pevAttacker  11 bPistol  12 shared_rand
+
+	so arg 4 is the cone, and it is a scalar here rather than the Float[3] that
+	FireBuckshots takes. This runs for every entity on the server that fires a
+	bullet, so the guard is not optional - g_bFiringAngelic is the flag the attack
+	hook already sets from the weapon entity it was handed, which keeps this off the
+	per-bullet lookup path entirely.
+*/
+public Fw_FireBullets3_Pre(pEntity, Float:vecSrc[3], Float:vecDirShooting[3], Float:vecSpread, Float:flDistance,
+                           iPenetration, iBulletType, iDamage, Float:flRangeModifier, pevAttacker, bool:bPistol, shared_rand)
+{
+	if (pEntity < 1 || pEntity > g_iMaxPlayers || !g_bFiringAngelic[pEntity])
+		return HC_CONTINUE
+
+	new Float:scale = get_pcvar_float(g_pSpreadScale)
+
+	if (scale < 0.0)
+		scale = 0.0
+
+	// nothing to write at 1.0
+	if (scale == 1.0)
+		return HC_CONTINUE
+
+	SetHookChainArg(4, ATYPE_FLOAT, vecSpread * scale)
+
+	return HC_CONTINUE
+}
+
+// A hole at each real impact point. This is where the rounds actually went.
+public Fw_TraceAttack(iEnt, iAttacker, Float:flDamage, Float:fDir[3], ptr, iDamageType)
+{
+	if (!g_bDecalsOk || !get_pcvar_num(g_pDecals) || !get_pcvar_num(g_pDecalReal))
+		return
+
+	/*
+		Bullets only. The stab calls ExecuteHamB(Ham_TraceAttack, ...) itself with
+		DMG_NEVERGIB|DMG_CLUB, so without this a melee hit would stamp a bullet
+		hole. The firing flag below already happens to exclude it - the stab runs
+		off SecondaryAttack - but that is a side effect, not a guard, and it would
+		stop being true the moment either path moved.
+	*/
+	if (!(iDamageType & DMG_BULLET))
+		return
+
+	// the O(1) flag set in Fw_Primary_Pre, not an entity search per bullet
+	if (iAttacker < 1 || iAttacker > g_iMaxPlayers || !g_bFiringAngelic[iAttacker])
+		return
+
+	static Float:end[3]
+	get_tr2(ptr, TR_vecEndPos, end)
+
+	message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+	write_byte(TE_GUNSHOTDECAL)
+	engfunc(EngFunc_WriteCoord, end[0])
+	engfunc(EngFunc_WriteCoord, end[1])
+	engfunc(EngFunc_WriteCoord, end[2])
+	write_short(iEnt > 0 && pev_valid(iEnt) ? iEnt : 0)
+	write_byte(g_iDecals[random_num(0, sizeof g_iDecals - 1)])
+	message_end()
+}
+
 DrawBulletHole(id)
 {
+	// superseded by Fw_TraceAttack unless the old behaviour is asked for
+	if (get_pcvar_num(g_pDecalReal))
+		return
+
 	if (!g_bDecalsOk || !get_pcvar_num(g_pDecals))
 		return
 

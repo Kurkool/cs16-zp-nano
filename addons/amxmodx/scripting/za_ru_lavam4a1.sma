@@ -1,10 +1,39 @@
 #include <amxmodx>
+#include <engine>
 #include <fakemeta>
 #include <fun>
 #include <hamsandwich>
 #include <cstrike>
 #include <zombieplague>
- 
+
+/*
+	Ownership keyed off the weapon, not off the player.
+
+	This plugin used to hold ownership only in g_HasGalil[], cleared on connect,
+	disconnect and death - but NOT on drop, even though drop_prim() drops the
+	gun on every purchase. So the flag outlived the weapon: drop the galil and
+	you still counted as holding a FrozenLava until you next died.
+
+	That mattered once a second extra item started hijacking weapon_galil.
+	cso_at15hw drops all primaries before handing over its own galil, so buying
+	an AT15 while holding a FrozenLava left BOTH plugins believing they owned the
+	same gun, and both wrote pev_viewmodel2 on deploy.
+
+	The fix is the convention the rest of the server already uses: stamp the
+	weapon entity's pev_impulse on drop and read it back on pickup, so the
+	identity travels with the gun instead of with the player. Keys in use, all of
+	which this must avoid: 5 (Scar_Born_Beast), 834 (balrogm4), 899 (cso_at15hw),
+	1997 (zp_frost_m4a1), 110918273 (bak47p), 748120931 (Iron Beast) and the two
+	51415444783563/564 that ak47_transformers_extra and the Angelic use.
+
+	Unlike the Angelic this keeps its g_HasGalil[] flag rather than deriving
+	everything from the entity - that would mean rewriting a dozen call sites in
+	a plugin we did not write. The flag is now correct on drop, which is what the
+	clash needed.
+*/
+#define EV_INT_WEAPONKEY   EV_INT_impulse
+#define FROZENLAVA_KEY     20260816
+
 #define is_valid_player(%1) (1 <= %1 <= 32)
 new GALIL_V_MODEL[64] = "models/zombie_amxx_ru/v_blue_knight.mdl"
 new GALIL_P_MODEL[64] = "models/zombie_amxx_ru/p_blue_knight.mdl"
@@ -21,7 +50,22 @@ new bool:g_HasGalil[33], g_hasZoom[33]
 new m_spriteTexture
 new g_itemid
  
+/*
+	drop_prim used to test this mask, which is just the galil - so buying this while
+	holding an extra item built on another base left both primaries in hand. give_item
+	does not enforce the one-primary rule the buy menu does, and cso_at15hw is on the
+	galil, Scar_Born_Beast on the ump45, yt_weapon_balrogm4_0 on the m249.
+
+	Kept because checkModel and the damage paths still read it as "is this the base
+	weapon we hijack"; the dropping now uses the full primary set below.
+*/
 const Wep_galil = ((1<<CSW_GALIL))
+
+const PRIMARY_WEAPONS_BIT_SUM =
+	(1<<CSW_SCOUT)|(1<<CSW_XM1014)|(1<<CSW_MAC10)|(1<<CSW_AUG)|(1<<CSW_UMP45)|
+	(1<<CSW_SG550)|(1<<CSW_GALIL)|(1<<CSW_FAMAS)|(1<<CSW_AWP)|(1<<CSW_MP5NAVY)|
+	(1<<CSW_M249)|(1<<CSW_M3)|(1<<CSW_M4A1)|(1<<CSW_TMP)|(1<<CSW_G3SG1)|
+	(1<<CSW_SG552)|(1<<CSW_AK47)|(1<<CSW_P90)
  
 new const GUNSHOT_DECALS[] = { 41, 42, 43, 44, 45 }
  
@@ -49,6 +93,10 @@ public plugin_init()
     RegisterHam(Ham_TraceAttack, "func_rotating", "Fw_TraceAttack", 1)
  //   register_concmd("getgunofdeath","zp_flm4", ADMIN_ADMIN)
     register_forward(FM_CmdStart, "fw_CmdStart")
+
+    // ownership follows the gun - see the note at the top of the file
+    register_forward(FM_SetModel, "fw_SetModel")
+    RegisterHam(Ham_Item_AddToPlayer, "weapon_galil", "fw_GalilAddToPlayer")
     // Keep this name at 31 characters or fewer. ZP holds item captions in an
     // ArrayCreate(32, 1) and compares the full name it was handed against the
     // truncated copy it read back from zp_extraitems.ini, so a 32-character
@@ -206,15 +254,34 @@ public client_disconnect(id)
     mod[id] = 0
 }
  
+/*
+	Death deliberately does NOT clear ownership any more.
+
+	It used to, and that raced the drop: dying makes CS build a weaponbox for the
+	primary, fw_SetModel fires to model it, and by then this had already zeroed the
+	flag it tests - so the FROZENLAVA_KEY was never stamped and the identity was
+	destroyed instead of handed to the gun on the ground. Dying is the most common
+	way this weapon changes hands, so that was the main path, not an edge case.
+
+	fw_SetModel clears the flag itself once the key is on the weapon, and
+	zp_user_infected_post clears it when you turn. Between them every real way of
+	losing the gun is covered, and it now matches what the comment in
+	zp_user_infected_post has claimed all along: kept across death and respawn.
+*/
 public Death()
 {
-    g_HasGalil[read_data(2)] = false
 }
  
 public fwHamPlayerSpawnPost(id)
 {
-    // g_HasGalil[id] = false   // unified by setup: ownership survives infect/humanize/death/respawn/round; cleared only on connect, disconnect, drop
-    mod[id] = 0
+    // Ownership survives respawn - cleared on connect, disconnect, infection and
+    // drop. But mod[] is the rage tier and it has to be rebuilt in step with it:
+    // zeroing mod while g_HasGalil stayed set left the two halves disagreeing, and
+    // fw_TakeDamage reads mod == 1 for the 3.5x tier and treats ANYTHING ELSE as
+    // "charge finished" - so mod 0 jumped straight to the 5.25x tier on the first
+    // bullet after every respawn, with no charge-up and on a gun the player may no
+    // longer even be carrying.
+    mod[id] = g_HasGalil[id] ? 1 : 0
 }
  
 public plugin_precache()
@@ -369,12 +436,76 @@ public zp_flm4(player)
 	   mod[player] = 1
 }
  
+/*
+	Dropped: hand the identity to the weapon entity and stop claiming it.
+
+	The weaponbox model is deliberately left alone. This gun has no w_ model of
+	its own - only v_ and p_ - so there is nothing to swap in, and returning
+	IGNORED rather than SUPERCEDE keeps cso_at15hw's own hook on this same event
+	working for its galil.
+*/
+public fw_SetModel(entity, model[])
+{
+	if (!is_valid_ent(entity))
+		return FMRES_IGNORED
+
+	static szClassName[33]
+	entity_get_string(entity, EV_SZ_classname, szClassName, charsmax(szClassName))
+
+	if (!equal(szClassName, "weaponbox"))
+		return FMRES_IGNORED
+
+	if (!equal(model, "models/w_galil.mdl"))
+		return FMRES_IGNORED
+
+	static iOwner, iStored
+	iOwner = entity_get_edict(entity, EV_ENT_owner)
+
+	if (!is_valid_player(iOwner) || !g_HasGalil[iOwner])
+		return FMRES_IGNORED
+
+	iStored = find_ent_by_owner(-1, "weapon_galil", entity)
+
+	if (!is_valid_ent(iStored))
+		return FMRES_IGNORED
+
+	// do not overwrite a claim cso_at15hw already stamped in this same slot - it
+	// hijacks weapon_galil too and its hook runs on the same weaponbox
+	if (entity_get_int(iStored, EV_INT_WEAPONKEY) != 0)
+		return FMRES_IGNORED
+
+	entity_set_int(iStored, EV_INT_WEAPONKEY, FROZENLAVA_KEY)
+
+	g_HasGalil[iOwner] = false
+	mod[iOwner] = 0
+
+	return FMRES_IGNORED
+}
+
+// Picked up: if this galil is the one that was dropped, it is a FrozenLava again
+public fw_GalilAddToPlayer(galil, id)
+{
+	if (!is_valid_ent(galil) || !is_user_connected(id))
+		return HAM_IGNORED
+
+	if (entity_get_int(galil, EV_INT_WEAPONKEY) != FROZENLAVA_KEY)
+		return HAM_IGNORED
+
+	g_HasGalil[id] = true
+	mod[id] = 1
+
+	// consumed, so a later plain galil in this entity slot is not mistaken for one
+	entity_set_int(galil, EV_INT_WEAPONKEY, 0)
+
+	return HAM_IGNORED
+}
+
 stock drop_prim(id)
 {
     new weapons[32], num
     get_user_weapons(id, weapons, num)
     for (new i = 0; i < num; i++) {
-        if (Wep_galil & (1<<weapons[i]))
+        if (PRIMARY_WEAPONS_BIT_SUM & (1<<weapons[i]))
         {
             static wname[32]
             get_weaponname(weapons[i], wname, sizeof wname - 1)

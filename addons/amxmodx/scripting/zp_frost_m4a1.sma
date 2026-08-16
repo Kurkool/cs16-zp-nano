@@ -154,8 +154,14 @@ public zp_extra_item_selected(player, itemid)
 			engclient_cmd "drop" is what G runs, so the purchase now takes the
 			path that already worked.
 		*/
-		if (FindOwnedM4A1(player))
-			engclient_cmd(player, "drop", "weapon_m4a1")
+		/*
+			Every primary, not just the m4a1. Dropping only this gun's own base
+			weapon leaves a second primary in hand whenever the player is holding an
+			extra item built on a different base - cso_at15hw is a galil,
+			Scar_Born_Beast a ump45, yt_weapon_balrogm4_0 an m249 - because give_item
+			does not enforce the one-primary rule the buy menu does.
+		*/
+		DropPrimaries(player)
 
 		give_item(player, "weapon_m4a1")
 
@@ -541,6 +547,30 @@ stock ColorPrint(const id, const input[], any: ...)
 	pev_owner scan: pev_owner reads 0 on a freshly deployed weapon, so a
 	search based on it silently finds nothing.
 */
+// Drop every primary the player is carrying, by the same route G does. Mask is
+// CS's own primary set, matching zombie_plague40 and cso_at15hw.
+#define PRIMARY_WEAPONS_BIT_SUM (\
+	(1<<CSW_SCOUT)|(1<<CSW_XM1014)|(1<<CSW_MAC10)|(1<<CSW_AUG)|(1<<CSW_UMP45)|\
+	(1<<CSW_SG550)|(1<<CSW_GALIL)|(1<<CSW_FAMAS)|(1<<CSW_AWP)|(1<<CSW_MP5NAVY)|\
+	(1<<CSW_M249)|(1<<CSW_M3)|(1<<CSW_M4A1)|(1<<CSW_TMP)|(1<<CSW_G3SG1)|\
+	(1<<CSW_SG552)|(1<<CSW_AK47)|(1<<CSW_P90))
+
+DropPrimaries(id)
+{
+	static weapons[32], num, wname[32]
+	num = 0
+	get_user_weapons(id, weapons, num)
+
+	for (new i = 0; i < num; i++)
+	{
+		if (!((1 << weapons[i]) & PRIMARY_WEAPONS_BIT_SUM))
+			continue
+
+		get_weaponname(weapons[i], wname, charsmax(wname))
+		engclient_cmd(id, "drop", wname)
+	}
+}
+
 FindOwnedM4A1(id)
 {
 	new ent = -1

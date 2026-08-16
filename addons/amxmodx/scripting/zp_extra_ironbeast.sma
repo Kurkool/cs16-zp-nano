@@ -69,6 +69,12 @@
 #include <fun>          // give_item
 #include <xs>
 #include <zombieplague>
+// reapi is a HARD dependency from here on, like zp_round_rules and the Angelic - no
+// #if defined guard, so this will not load without the module. It is here for the
+// bullet cone: CS bakes the spread into each weapon's own fire code and the only
+// lever from outside is pinning m_flAccuracy, which has never been shown to work.
+// See the fuller note in zp_extra_angelic_beast.sma.
+#include <reapi>
 
 #define PLUGIN  "[ZP] Extra Item: M4A1-S Iron Beast"
 #define VERSION "1.0"
@@ -113,8 +119,18 @@ new const SND_BOLT[]  = "ironbeast/boltrelease.wav"
 	Both are fractions of zp_ironbeast_reload_time, so changing the reload length
 	keeps them proportionally in place.
 */
-#define TASK_MAGIN  7205
-#define TASK_BOLT   7210
+/*
+	These are BASE + player id for id 1..32, so consecutive bases must be at least
+	33 apart. 7205 and 7210 were 5 apart: magin covered 7206-7237 and bolt covered
+	7211-7242, overlapping on 27 of the 32 slots. Player 6's magin task and player
+	1's bolt task were both id 7211, so set_task overwrote one with the other and
+	remove_task for either killed both - reload beats going missing or firing on the
+	wrong player, worse the more players were on the server.
+
+	100 apart, matching the Angelic's spacing.
+*/
+#define TASK_MAGIN  7100
+#define TASK_BOLT   7200
 
 // bullet holes come from the fire event, which is blocked to kill the stock
 // report - so they have to be drawn by hand
@@ -140,7 +156,21 @@ new bool:g_bDecalsOk
 #define ANIM_POSTFIRE 5
 #define ANIM_STAB     6
 
-#define STAB_DELAY  0.85
+/*
+	The stab lockout is a cvar now, and 0.85 was much too long.
+
+	Measured off v_ironbeast.mdl: sequence 6 "knife-attack" is 267 frames at 500 fps
+	= 0.534s. The 0.85 this used to hold came from CrossFire's Born Beast variant,
+	not the Prism Beast the rest of this gun is matched to - that one's melee
+	cooldown is 0.55, from intervalTime 0.070|0.55. So the gun sat locked for 316ms
+	after the animation had finished, with both mouse buttons dead.
+
+	0.55 satisfies both: it is CrossFire's own number for this gun AND the 0.534s
+	animation fits inside it with 16ms to spare. Unlike the Angelic, whose stab
+	animation is 0.670s and therefore cannot go below that.
+
+	If the model is ever re-timed this has to follow it.
+*/
 
 // the model's reload runs 160 frames at 52 fps
 #define RELOAD_TIME 3.08
@@ -273,6 +303,10 @@ new Float:g_fPushAngle[33][3]
 new g_iFireIndex[33]
 new bool:g_bInPrimaryAttack
 
+// true only for the window inside the original PrimaryAttack where the bullet
+// traces run, so Fw_TraceAttack can test it instead of searching for the weapon
+new bool:g_bFiringIronBeast[33]
+
 // reload bookkeeping: CS refills to the M4A1's own 30 round cap, so the real
 // clip has to be rebuilt afterwards from values captured before it ran
 new g_iTmpClip[33]   // clip captured before CS refills it, -1 = no reload running
@@ -284,7 +318,7 @@ new g_iOrigFireEvent
 new g_iItemId, g_iMaxPlayers
 new g_pDmg, g_pClip, g_pAmmo, g_pStabDmg, g_pStabRange, g_pRecoil, g_pReloadTime, g_pDecals
 new g_pFracMagIn, g_pFracBolt
-new g_pDebug, g_pRecoilMode, g_pInterval, g_pDeployTime
+new g_pDebug, g_pRecoilMode, g_pInterval, g_pDeployTime, g_pDecalReal, g_pStabDelay, g_pSpreadScale
 
 public plugin_precache()
 {
@@ -391,6 +425,22 @@ public plugin_init()
 	// disables the whole thing if any comes back <= 0.
 	g_pDecals = register_cvar("zp_ironbeast_decals", "1")
 
+	// 1 = a hole at each real impact, spread and all
+	// 0 = the old single hole on the crosshair, which flattered the gun
+	g_pDecalReal = register_cvar("zp_ironbeast_decal_real", "1")
+
+	// seconds both mouse buttons stay locked after a stab - see the note beside
+	// ANIM_STAB. CrossFire's own melee cooldown for the Prism Beast, and the
+	// measured 0.534s animation fits inside it.
+	g_pStabDelay = register_cvar("zp_ironbeast_stab_delay", "0.55")
+
+	// bullet cone multiplier; 1.0 leaves the M4A1's own spread alone. A real
+	// percentage on the cone the engine fires with, not a poke at m_flAccuracy.
+	g_pSpreadScale = register_cvar("zp_ironbeast_spread_scale", "0.5")
+
+	if (!RegisterHookChain(RG_CBaseEntity_FireBullets3, "Fw_FireBullets3_Pre", false))
+		log_amx("[IRONBEAST] RegisterHookChain(FireBullets3) FAILED - zp_ironbeast_spread_scale will do nothing")
+
 	/*
 		Off by default. The two log sites in here are cheap - one line per
 		purchase and one per right click, neither on the firing path - but
@@ -411,6 +461,18 @@ public plugin_init()
 	RegisterHam(Ham_Weapon_Reload,          "weapon_m4a1", "Fw_Reload_Post",    1)
 	RegisterHam(Ham_Item_PostFrame,         "weapon_m4a1", "Fw_ItemPostFrame",  0)
 	RegisterHam(Ham_TakeDamage,             "player",      "Fw_TakeDamage_Pre", 0)
+
+	// classname list derived from the entity lumps of all 20 zm_cf_*.bsp on this
+	// server - see the note on the same block in zp_extra_angelic_beast.sma
+	RegisterHam(Ham_TraceAttack, "worldspawn",         "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_breakable",     "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_wall",          "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_wall_toggle",   "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_conveyor",      "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_door",          "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_door_rotating", "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_plat",          "Fw_TraceAttack", 1)
+	RegisterHam(Ham_TraceAttack, "func_rotating",      "Fw_TraceAttack", 1)
 
 	register_forward(FM_SetModel,      "Fw_SetModel")
 	register_forward(FM_PlaybackEvent, "Fw_PlaybackEvent")
@@ -479,9 +541,14 @@ GiveIronBeast(id)
 
 		The old gun lands on the floor as an ordinary M4A1, which is what it
 		is - the key that marks an Iron Beast goes on the new entity below.
+
+		Widened from "drop weapon_m4a1" to "drop every primary". Dropping only this
+		gun's own base weapon leaves a second primary in hand whenever the player is
+		holding an extra item built on a different base - cso_at15hw is a galil,
+		Scar_Born_Beast a ump45, yt_weapon_balrogm4_0 an m249 - because give_item
+		does not enforce the one-primary rule the buy menu does.
 	*/
-	if (FindOwnedWeapon(id, "weapon_m4a1"))
-		engclient_cmd(id, "drop", "weapon_m4a1")
+	DropPrimaries(id)
 
 
 	give_item(id, "weapon_m4a1")
@@ -559,6 +626,30 @@ bool:HoldingIronBeast(id)
 		return false
 
 	return Is_IronBeast(FindOwnedWeapon(id, "weapon_m4a1"))
+}
+
+// Drop every primary the player is carrying, by the same route G does. Mask is
+// CS's own primary set, matching zombie_plague40 and cso_at15hw.
+#define PRIMARY_WEAPONS_BIT_SUM (\
+	(1<<CSW_SCOUT)|(1<<CSW_XM1014)|(1<<CSW_MAC10)|(1<<CSW_AUG)|(1<<CSW_UMP45)|\
+	(1<<CSW_SG550)|(1<<CSW_GALIL)|(1<<CSW_FAMAS)|(1<<CSW_AWP)|(1<<CSW_MP5NAVY)|\
+	(1<<CSW_M249)|(1<<CSW_M3)|(1<<CSW_M4A1)|(1<<CSW_TMP)|(1<<CSW_G3SG1)|\
+	(1<<CSW_SG552)|(1<<CSW_AK47)|(1<<CSW_P90))
+
+DropPrimaries(id)
+{
+	static weapons[32], num, wname[32]
+	num = 0
+	get_user_weapons(id, weapons, num)
+
+	for (new i = 0; i < num; i++)
+	{
+		if (!((1 << weapons[i]) & PRIMARY_WEAPONS_BIT_SUM))
+			continue
+
+		get_weaponname(weapons[i], wname, charsmax(wname))
+		engclient_cmd(id, "drop", wname)
+	}
 }
 
 FindOwnedWeapon(id, const classname[])
@@ -748,6 +839,10 @@ public Fw_Primary_Pre(ent)
 	g_bInPrimaryAttack = true
 	pev(id, pev_punchangle, g_fPushAngle[id])
 
+	// the bullet traces run between this hook and the post one; see the same flag
+	// in zp_extra_angelic_beast.sma for why HoldingIronBeast is too expensive here
+	g_bFiringIronBeast[id] = true
+
 	return HAM_IGNORED
 }
 
@@ -759,6 +854,11 @@ public Fw_Primary_Post(ent)
 		return HAM_IGNORED
 
 	new id = get_pdata_cbase(ent, OFF_WEAPON_PLAYER, LINUX_WEAPON)
+
+	// closed before any of the early returns below, so an empty-clip trigger pull
+	// cannot leave the window open into the next player's bullets
+	if (id >= 1 && id <= g_iMaxPlayers)
+		g_bFiringIronBeast[id] = false
 
 	if (!is_user_alive(id) || !Is_IronBeast(ent))
 		return HAM_IGNORED
@@ -869,9 +969,11 @@ Stab(id, ent)
 			ANIM_STAB,
 			pev(id, pev_weaponanim))
 
-	set_pdata_float(ent, OFF_WEAPON_NEXT_PRIMARY,   STAB_DELAY, LINUX_WEAPON)
-	set_pdata_float(ent, OFF_WEAPON_NEXT_SECONDARY, STAB_DELAY, LINUX_WEAPON)
-	set_pdata_float(id,  OFF_PLAYER_NEXT_ATTACK,    STAB_DELAY, LINUX_PLAYER)
+	new Float:stabDelay = get_pcvar_float(g_pStabDelay)
+
+	set_pdata_float(ent, OFF_WEAPON_NEXT_PRIMARY,   stabDelay, LINUX_WEAPON)
+	set_pdata_float(ent, OFF_WEAPON_NEXT_SECONDARY, stabDelay, LINUX_WEAPON)
+	set_pdata_float(id,  OFF_PLAYER_NEXT_ATTACK,    stabDelay, LINUX_PLAYER)
 
 	static Float:start[3], Float:view[3], Float:angles[3], Float:fwd[3], Float:reach[3], Float:dest[3]
 
@@ -1116,6 +1218,18 @@ public Fw_ItemPostFrame(ent)
 	new bp   = cs_get_user_bpammo(id, CSW_M4A1)
 	new need = min(get_pcvar_num(g_pClip) - clip, bp)
 
+	/*
+		A negative need mints ammo. Lower zp_ironbeast_clip while a fuller magazine
+		is loaded and the subtraction goes negative: clip + need takes rounds out of
+		the magazine while bp - need puts them into the reserve, so the reserve grows
+		on every reload. Both cvars are live-tunable, so it is reachable.
+
+		Clamped rather than returned early - the IN_RELOAD flag below still has to be
+		cleared or the weapon stays stuck mid-reload. Same fix as the Angelic.
+	*/
+	if (need < 0)
+		need = 0
+
 	set_pdata_int(ent, OFF_WEAPON_CLIP, clip + need, LINUX_WEAPON)
 	cs_set_user_bpammo(id, CSW_M4A1, bp - need)
 	set_pdata_int(ent, OFF_WEAPON_IN_RELOAD, 0, LINUX_WEAPON)
@@ -1243,8 +1357,67 @@ public Task_Bolt(taskid)
 		emit_sound(id, CHAN_ITEM, SND_BOLT, VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
 }
 
+/*
+	Scale the bullet cone. Arg 4 of FireBullets3 is vecSpread - see the fuller
+	parameter map in zp_extra_angelic_beast.sma. Runs for every bullet fired by
+	anything on the server, hence the guard.
+*/
+public Fw_FireBullets3_Pre(pEntity, Float:vecSrc[3], Float:vecDirShooting[3], Float:vecSpread, Float:flDistance,
+                           iPenetration, iBulletType, iDamage, Float:flRangeModifier, pevAttacker, bool:bPistol, shared_rand)
+{
+	if (pEntity < 1 || pEntity > g_iMaxPlayers || !g_bFiringIronBeast[pEntity])
+		return HC_CONTINUE
+
+	new Float:scale = get_pcvar_float(g_pSpreadScale)
+
+	if (scale < 0.0)
+		scale = 0.0
+
+	if (scale == 1.0)
+		return HC_CONTINUE
+
+	SetHookChainArg(4, ATYPE_FLOAT, vecSpread * scale)
+
+	return HC_CONTINUE
+}
+
+/*
+	A hole at each real impact point - the same change made to the Angelic, whose
+	DrawBulletHole this one is a byte-identical copy of.
+
+	Bullets only: the stab calls ExecuteHamB(Ham_TraceAttack, ...) with
+	DMG_NEVERGIB|DMG_CLUB, and a melee hit should not stamp a bullet hole.
+*/
+public Fw_TraceAttack(iEnt, iAttacker, Float:flDamage, Float:fDir[3], ptr, iDamageType)
+{
+	if (!g_bDecalsOk || !get_pcvar_num(g_pDecals) || !get_pcvar_num(g_pDecalReal))
+		return
+
+	if (!(iDamageType & DMG_BULLET))
+		return
+
+	if (iAttacker < 1 || iAttacker > g_iMaxPlayers || !g_bFiringIronBeast[iAttacker])
+		return
+
+	static Float:hitEnd[3]
+	get_tr2(ptr, TR_vecEndPos, hitEnd)
+
+	message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+	write_byte(TE_GUNSHOTDECAL)
+	engfunc(EngFunc_WriteCoord, hitEnd[0])
+	engfunc(EngFunc_WriteCoord, hitEnd[1])
+	engfunc(EngFunc_WriteCoord, hitEnd[2])
+	write_short(iEnt > 0 && pev_valid(iEnt) ? iEnt : 0)
+	write_byte(g_iDecals[random_num(0, sizeof g_iDecals - 1)])
+	message_end()
+}
+
 DrawBulletHole(id)
 {
+	// superseded by Fw_TraceAttack unless the old centred behaviour is asked for
+	if (get_pcvar_num(g_pDecalReal))
+		return
+
 	if (!g_bDecalsOk || !get_pcvar_num(g_pDecals))
 		return
 
