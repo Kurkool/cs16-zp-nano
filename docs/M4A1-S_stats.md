@@ -141,10 +141,22 @@ Beast's melee cooldown. The 3.5 m reach is a deliberate buff over the original.
 
 ### Why the numbers cannot simply be copied across
 
-**ZP applies `zp_zombie_armor 0.75` to every point of damage a human deals to a
-normal zombie**, before the weapon plugin's own hook sees it. A number written
-into the plugin lands at 75% of its value. CrossFire has no such multiplier, so
-matching a "523 melee" means sending `523 / 0.75 = 697.33`.
+> **2026-08-17: `zp_zombie_armor` is 1.0 now, not 0.75.** Everything in this
+> section still describes the mechanism correctly — the multiplier is applied in
+> `zombie_plague40.sma:2075` before the weapon plugin's hook sees the damage, and
+> the ordering trap is real — but the *arithmetic* below is written for 0.75 and no
+> longer matches the server. With the multiplier at 1.0 that step is a no-op, so
+> every worked example here lands 33% higher: the Angelic's `2.5` is 82.5 per body
+> shot rather than 61.875, and `zp_angelic_dmg = N / 33` rather than `N / 24.75`.
+>
+> The reason it was turned off is in `zombieplague.cfg` beside the cvar: CrossFire
+> has no damage-reduction field anywhere in its own class table, so this was never
+> a CSCF value to begin with.
+
+**ZP applies `zp_zombie_armor` to every point of damage a human deals to a normal
+zombie**, before the weapon plugin's own hook sees it. At the 0.75 this was written
+against, a number written into the plugin lands at 75% of its value. CrossFire has
+no such multiplier, so matching a "523 melee" meant sending `523 / 0.75 = 697.33`.
 
 The order catches people out, because it is the opposite of what the cvar name
 suggests. ZP loads first, so its `Ham_TakeDamage` hook runs first and the armor

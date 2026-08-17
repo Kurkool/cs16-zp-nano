@@ -72,7 +72,8 @@
 // reapi is a HARD dependency from here on, like zp_round_rules and the Angelic - no
 // #if defined guard, so this will not load without the module. It is here for the
 // bullet cone: CS bakes the spread into each weapon's own fire code and the only
-// lever from outside is pinning m_flAccuracy, which has never been shown to work.
+// lever CS offers from outside is pinning m_flAccuracy, which is measured NOT to
+// work - the cone climbs across a burst regardless. That clamp has been removed.
 // See the fuller note in zp_extra_angelic_beast.sma.
 #include <reapi>
 
@@ -244,6 +245,9 @@ new bool:g_bTraceMixed[33]
 #define OFF_WEAPON_TIME_IDLE      48
 #define OFF_WEAPON_CLIP           51
 #define OFF_WEAPON_IN_RELOAD      54
+// m_flAccuracy. Kept as a record, deliberately unused - forcing it to 0 does not
+// change the cone, measured 2026-08-17. See the fuller note in
+// zp_extra_angelic_beast.sma; spread is zp_ironbeast_spread_scale now.
 #define OFF_WEAPON_ACCURACY       71
 #define OFF_PLAYER_NEXT_ATTACK    83
 #define OFF_PLAYER_ACTIVE_ITEM   373
@@ -832,10 +836,6 @@ public Fw_Primary_Pre(ent)
 	if (!is_user_alive(id) || !Is_IronBeast(ent))
 		return HAM_IGNORED
 
-	// accuracy is stored on the weapon and grows as you hold the trigger -
-	// pinning it to zero is what makes the gun feel locked on
-	set_pdata_float(ent, OFF_WEAPON_ACCURACY, 0.0, LINUX_WEAPON)
-
 	g_bInPrimaryAttack = true
 	pev(id, pev_punchangle, g_fPushAngle[id])
 
@@ -907,8 +907,6 @@ public Fw_Primary_Post(ent)
 			g_iTraceN[id]++
 		}
 	}
-
-	set_pdata_float(ent, OFF_WEAPON_ACCURACY, 0.0, LINUX_WEAPON)
 
 	// rate of fire. Both halves are set for the same reason the stab sets
 	// them: the weapon gates the trigger, the player field gates everything,

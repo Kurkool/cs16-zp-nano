@@ -130,36 +130,28 @@ new const Float:KICKBACK[4][7] = {
 
 new g_iShotsFired[33], g_iKickDir[33]
 new Float:g_fLastShot[33]
-new cvar_recoilmode_aks74u, cvar_kickscale_aks74u, cvar_acccap_aks74u
+new cvar_recoilmode_aks74u, cvar_kickscale_aks74u
 
 /*
-	Accuracy tracing, for one specific question.
+	The accuracy question, and how it ended.
 
-	Clamping m_flAccuracy made no visible difference to the group at all - 0.0 and
-	1.25 produced the same pattern - while the kick table, applied from the POST
-	half of this same attack hook, clearly does work. So the hooks fire; the write
-	just is not reaching the spread.
+	Clamping m_flAccuracy was the only lever CS appeared to offer, and it never
+	worked. It was measured on 2026-08-17 from the Angelic side: the cone ReGameDLL
+	hands FireBullets3 still climbs 0.004 -> 0.020 across a burst with the value
+	forced to 0 on every shot, which is m_flAccuracy growing as though nothing had
+	been written. Offset 71 is the right slot - the write lands - but something
+	recomputes it between the write and the shot.
 
-	Two candidates left, and this tells them apart in one burst:
+	The clamp, its cvar and the trace built to answer this are all gone. Spread is
+	zp_aks74u_spread_scale now, which was measured working: 2.46 units of group at
+	scale 0 against 5.36 at 1.0, the remainder at 0 being camera kick rather than
+	cone.
 
-	  - the offset is wrong. docs/M4A1-S_stats.md records that the two pdata
-	    tables on this machine disagree, 71 against 62. Whichever slot holds the
-	    real m_flAccuracy is the one that CLIMBS over a burst, roughly 0.35 up
-	    towards a ceiling near 1.25. The other will sit still or read nonsense.
-
-	  - the game recomputes it. We force the value to the cap on every shot, so if
-	    the NEXT shot reads back something other than the cap, something between
-	    our two hooks put it back, and no amount of clamping can win.
-
-	Buffered and printed once per burst rather than per shot - log_amx on the
-	firing path is what put the frame rate on the floor in the 08-15 handoff, and
-	this goes to the player's console rather than the log for the same reason.
+	Worth keeping in mind: nobody could have caught this earlier, because the bullet
+	holes were being drawn straight down v_angle and never showed the spread they
+	were supposed to be flattering.
 */
-#define ACC_TRACE_MAX 12
-new Float:g_fAcc71[33][ACC_TRACE_MAX]
-new Float:g_fAcc62[33][ACC_TRACE_MAX]
-new g_iAccN[33]
-new cvar_accdebug_aks74u, cvar_spreadscale_aks74u
+new cvar_spreadscale_aks74u
 
 new cvar_dmg_aks74u, cvar_recoil_aks74u, g_itemid_aks74u, cvar_clip_aks74u, cvar_spd_aks74u, cvar_aks74u_ammo
 new g_MaxPlayers, g_orig_event_aks74u, g_IsInPrimaryAttack
@@ -222,11 +214,6 @@ public plugin_init()
 	// scaling, kept so the two can be compared without a recompile
 	cvar_recoilmode_aks74u = register_cvar("zp_aks74u_recoil_mode", "1")
 	cvar_kickscale_aks74u  = register_cvar("zp_aks74u_kick_scale", "0.55")
-	// ceiling on m_flAccuracy - 0.0 is the Angelic's "locked on", raise it to let
-	// the group open up again while the trigger is held
-	cvar_acccap_aks74u     = register_cvar("zp_aks74u_accuracy_cap", "0.0")
-	// one line per burst to the shooter's console; off while playing
-	cvar_accdebug_aks74u   = register_cvar("zp_aks74u_debug_acc", "0")
 
 	/*
 		The real spread control. 1.0 leaves the galil's own cone alone, 0.5 halves
@@ -589,18 +576,6 @@ public fw_aks74u_PrimaryAttack(Weapon)
 
 	g_bFiringAT15[Player] = true
 
-	// read BOTH candidate slots before we touch either one
-	if (get_pcvar_num(cvar_accdebug_aks74u) && g_iAccN[Player] < ACC_TRACE_MAX)
-	{
-		g_fAcc71[Player][g_iAccN[Player]] = get_pdata_float(Weapon, 71, WEAP_LINUX_XTRA_OFF)
-		g_fAcc62[Player][g_iAccN[Player]] = get_pdata_float(Weapon, 62, WEAP_LINUX_XTRA_OFF)
-		g_iAccN[Player]++
-	}
-
-	// before the shot, so the spread the weapon is about to compute uses the
-	// capped value rather than whatever the burst had grown to
-	CapAccuracy(Weapon)
-
 	g_IsInPrimaryAttack = 1
 	pev(Player,pev_punchangle,cl_pushangle[Player])
 
@@ -674,10 +649,6 @@ public fw_aks74u_PrimaryAttack_Post(Weapon)
 			set_pev(Player,pev_punchangle,push)
 		}
 
-		// and again after, because the weapon just grew it for the next round -
-		// the Angelic pins it at both points for the same reason
-		CapAccuracy(Weapon)
-
 		// the dropped fire event took the muzzle flash with it; the holes still
 		// come from fw_TraceAttack, at the real impact points
 		set_pev(Player, pev_effects, pev(Player, pev_effects) | EF_MUZZLEFLASH)
@@ -731,35 +702,6 @@ public message_DeathMsg(msg_id, msg_dest, id)
 	in the weapon's own fire code - moving is checked before ducking, so shuffling
 	while crouched gets the walking row, not the ducking one.
 */
-// One line per burst, to the shooter's console. Whichever column climbs is the
-// real m_flAccuracy; if the column we clamp reads back above the cap on the next
-// shot, something is putting it back between our hooks.
-FlushAccTrace(id)
-{
-	if (!g_iAccN[id])
-		return
-
-	new line[320], piece[32]
-	formatex(line, charsmax(line), "[AT15] cap=%.2f  71:", get_pcvar_float(cvar_acccap_aks74u))
-
-	for (new i = 0; i < g_iAccN[id]; i++)
-	{
-		formatex(piece, charsmax(piece), " %.3f", g_fAcc71[id][i])
-		add(line, charsmax(line), piece)
-	}
-
-	add(line, charsmax(line), "  |  62:")
-
-	for (new i = 0; i < g_iAccN[id]; i++)
-	{
-		formatex(piece, charsmax(piece), " %.3f", g_fAcc62[id][i])
-		add(line, charsmax(line), piece)
-	}
-
-	client_print(id, print_console, "%s", line)
-	g_iAccN[id] = 0
-}
-
 /*
 	Scale the bullet cone, in the one place the engine actually uses it.
 
@@ -794,20 +736,6 @@ public Fw_FireBullets3_Pre(pEntity, Float:vecSrc[3], Float:vecDirShooting[3], Fl
 	SetHookChainArg(4, ATYPE_FLOAT, vecSpread * scale)
 
 	return HC_CONTINUE
-}
-
-// Hold m_flAccuracy under its ceiling. A clamp rather than a straight assignment
-// so the weapon is still allowed to be MORE accurate than the cap on its own -
-// at a cap of 0.0 this behaves exactly like the Angelic's hard pin.
-CapAccuracy(weapon_entity)
-{
-	new Float:cap = get_pcvar_float(cvar_acccap_aks74u)
-
-	if (cap < 0.0)
-		cap = 0.0
-
-	if (get_pdata_float(weapon_entity, m_flAccuracy, WEAP_LINUX_XTRA_OFF) > cap)
-		set_pdata_float(weapon_entity, m_flAccuracy, cap, WEAP_LINUX_XTRA_OFF)
 }
 
 GetStance(id)
@@ -953,10 +881,7 @@ public aks74u_ItemPostFrame(weapon_entity)
      // end the burst once the trigger has been off for a moment, so the next one
      // starts from the base kick again instead of the top of the climb
      if (g_iShotsFired[id] && get_gametime() - g_fLastShot[id] > 0.25)
-     {
-          FlushAccTrace(id)
           g_iShotsFired[id] = 0
-     }
 
      static iClipExtra
 

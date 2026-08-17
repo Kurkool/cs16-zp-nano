@@ -424,9 +424,18 @@ public fw_CmdStart( id, uc_handle, seed )
  
 public zp_flm4(player)
 {
-        if (user_has_weapon(player, CSW_GALIL))
-            drop_prim(player)
-	    
+        /*
+            Unconditional.
+
+            This used to be guarded by `if (user_has_weapon(player, CSW_GALIL))`,
+            which is the only weapon drop_prim can no longer be relied on to be
+            looking for: widening its mask to every primary did nothing while the
+            call itself was still gated on holding a galil. Buy a plain M4A1 from
+            ZP's menu, then buy this - the guard is false, nothing is dropped, and
+            give_item hands over a second primary.
+        */
+        drop_prim(player)
+
         give_item(player, "weapon_galil")
         // was "Ты купил FrozenLava DarkM4a1" in the shipped source; the
         // Cyrillic did not survive being saved back out and had turned into

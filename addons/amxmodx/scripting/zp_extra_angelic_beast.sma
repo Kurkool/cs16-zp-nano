@@ -16,7 +16,9 @@
 	    - under 30% ammo the gun "awakens": second animation set, faster
 	      movement, and a short centre-screen line
 	    - recoil and rate of fire are CrossFire's own numbers for the
-	      M4A1-S Prism Beast, and accuracy is pinned
+	      M4A1-S Prism Beast, and the bullet cone is scaled by
+	      zp_angelic_spread_scale. It used to say accuracy was pinned; that was
+	      never true - see the note beside OFF_WEAPON_ACCURACY.
 
 	Notes on the assets
 	    The pack shipped its models under the stock names (v_m4a1.mdl etc), so
@@ -78,10 +80,11 @@
 	It is here for the one CrossFire number that could never be ported: bullet
 	spread. The Prism Beast controls it with moderator 0.5 and resetTime 0.3, an
 	accuracy-recovery model CS has no equivalent for - CS bakes the cone into each
-	weapon's own fire code, computed from m_flAccuracy, and the only lever from
-	outside is to pin that value. Which this has been doing, and which has never
-	been shown to move anything. ReGameDLL exposes the call that uses the cone, so
-	the cone itself becomes editable.
+	weapon's own fire code, computed from m_flAccuracy, and the only lever CS offers
+	from outside is to pin that value - which this plugin did for weeks and which is
+	now measured NOT to work: the cone still climbs across a burst with the value
+	forced to 0 on every shot. ReGameDLL exposes the call that uses the cone, so the
+	cone itself becomes editable, and that is measured working.
 */
 #include <reapi>
 
@@ -234,6 +237,21 @@ new bool:g_bTraceMixed[33]
 #define OFF_WEAPON_TIME_IDLE      48
 #define OFF_WEAPON_CLIP           51
 #define OFF_WEAPON_IN_RELOAD      54
+/*
+	m_flAccuracy. Kept as a record, deliberately unused.
+
+	71 is the right slot - writing it works, and the two pdata tables on this machine
+	disagreeing about it (71 here against 62 in the floating-damage include) was never
+	the problem. The problem is that forcing it to 0 changes nothing: measured on
+	2026-08-17, the cone ReGameDLL then hands FireBullets3 still climbs 0.004 -> 0.020
+	across a burst, which is m_flAccuracy growing exactly as if nothing had been
+	written. Something recomputes it between the write and the shot.
+
+	It was pinned twice per shot in this file for weeks and could never have been
+	verified, because the bullet holes were drawn straight down v_angle and never
+	showed the spread they were supposed to be flattering. Spread is controlled by
+	zp_angelic_spread_scale now, which is measurable and measured.
+*/
 #define OFF_WEAPON_ACCURACY       71
 #define OFF_PLAYER_NEXT_ATTACK    83
 #define OFF_PLAYER_ACTIVE_ITEM   373
@@ -291,6 +309,16 @@ new bool:g_bInPrimaryAttack
 // traces run, so Fw_TraceAttack can test it instead of searching for the weapon
 new bool:g_bFiringAngelic[33]
 
+// spread tracing, buffered one line per burst - see Fw_FireBullets3_Pre
+#define SPREAD_TRACE_MAX 12
+new Float:g_fSpreadIn[33][SPREAD_TRACE_MAX]
+new Float:g_fSpreadOut[33][SPREAD_TRACE_MAX]
+new g_iSpreadN[33]
+
+// where the rounds actually landed, recorded in Fw_TraceAttack
+new Float:g_fImpact[33][SPREAD_TRACE_MAX][3]
+new g_iImpactN[33]
+
 // reload bookkeeping: CS refills to the M4A1's own 30 round cap, so the real
 // clip has to be rebuilt afterwards from values captured before it ran
 new g_iTmpClip[33]   // clip captured before CS refills it, -1 = no reload running
@@ -307,7 +335,8 @@ new g_iOrigFireEvent
 
 new g_iItemId, g_iMaxPlayers
 new g_pDmg, g_pClip, g_pAmmo, g_pStabDmg, g_pStabRange, g_pRecoil, g_pSpeed, g_pThreshold, g_pReloadTime, g_pDecals, g_pAwakenMsg
-new g_pDebug, g_pRecoilMode, g_pInterval, g_pDeployTime, g_pDecalReal, g_pStabDelay, g_pSpreadScale
+new g_pDebug, g_pRecoilMode, g_pInterval, g_pDeployTime, g_pDecalReal, g_pStabDelay, g_pSpreadScale, g_pDebugSpread
+new g_pDebugArgIdx, g_pDebugArgVal, g_pDebugArgType
 new g_pFracClipOut, g_pFracClipIn, g_pFracBolt, g_pFracBoltAlt
 
 public plugin_precache()
@@ -416,6 +445,15 @@ public plugin_init()
 		m_flAccuracy being reachable at all.
 	*/
 	g_pSpreadScale = register_cvar("zp_angelic_spread_scale", "0.5")
+
+	// one line per burst to the shooter's console, plus a log line if pEntity turns
+	// out not to be a player slot. Off while playing.
+	g_pDebugSpread = register_cvar("zp_angelic_debug_spread", "0")
+
+	// TEMPORARY argument probe - see the block in Fw_FireBullets3_Pre. 0 = off.
+	g_pDebugArgIdx  = register_cvar("zp_angelic_debug_argidx",  "0")
+	g_pDebugArgVal  = register_cvar("zp_angelic_debug_argval",  "0")
+	g_pDebugArgType = register_cvar("zp_angelic_debug_argtype", "0")   // 0 float, 1 int
 
 	// checked, because a hook that silently fails to attach would leave a cvar in
 	// the config doing nothing - the exact trap the accuracy pin turned out to be
@@ -851,10 +889,6 @@ public Fw_Primary_Pre(ent)
 	if (!is_user_alive(id) || !Is_Angelic(ent))
 		return HAM_IGNORED
 
-	// accuracy is stored on the weapon and grows as you hold the trigger -
-	// pinning it to zero is what makes the gun feel locked on
-	set_pdata_float(ent, OFF_WEAPON_ACCURACY, 0.0, LINUX_WEAPON)
-
 	g_bInPrimaryAttack = true
 	pev(id, pev_punchangle, g_fPushAngle[id])
 
@@ -935,8 +969,6 @@ public Fw_Primary_Post(ent)
 			g_iTraceN[id]++
 		}
 	}
-
-	set_pdata_float(ent, OFF_WEAPON_ACCURACY, 0.0, LINUX_WEAPON)
 
 	// rate of fire. Both halves are set for the same reason the stab sets
 	// them: the weapon gates the trigger, the player field gates everything,
@@ -1241,6 +1273,7 @@ public Fw_ItemPostFrame(ent)
 	if (g_iShotsFired[id] && get_gametime() - g_fLastShot[id] > 0.25)
 	{
 		FlushKickTrace(id)
+		FlushSpreadTrace(id)
 		g_iShotsFired[id] = 0
 	}
 
@@ -1479,9 +1512,134 @@ public Task_Bolt(taskid)
 	hook already sets from the weapon entity it was handed, which keeps this off the
 	per-bullet lookup path entirely.
 */
+/*
+	One line per burst: what the engine handed us, and what we asked arg 4 to become.
+
+	This answers everything EXCEPT whether the write took effect - reapi gives no
+	way to read an argument back. So the line tells you how far the code got, and
+	one behavioural test tells you the rest:
+
+	  no line at all         the hook is not firing - registration lied, or the M4A1
+	                         does not reach FireBullets3 on this ReGameDLL build
+	  "not a player slot"    pEntity is something else, so the guard can never pass
+	  n=0 while firing       the hook fires with a good index but g_bFiringAngelic
+	                         was false, so the write is being skipped
+	  a line with in->out    the code ran and asked for the right number
+
+	If the last case holds and the group STILL does not change, set
+	zp_angelic_spread_scale 0 and fire a burst at a wall. A cone of exactly zero puts
+	every round in one hole - if it still scatters, SetHookChainArg is not reaching
+	vecSpread and the argument index is wrong. That test is binary; 1.0 against 0.5
+	never was, which is why it read as "no difference".
+*/
+FlushSpreadTrace(id)
+{
+	if (!get_pcvar_num(g_pDebugSpread))
+		return
+
+	/*
+		Printed even when n is 0, which was the bug in the first version of this.
+
+		n=0 is not "nothing to report" - it is the single most important answer this
+		trace can give, because it means the burst ran and the hook never recorded a
+		bullet. Guarding on n>0 made that case silent and indistinguishable from the
+		trace being switched off, so the first two attempts produced an empty log and
+		no information either way.
+	*/
+	new line[352], piece[48]
+	formatex(line, charsmax(line), "[ANGELIC/SPREAD] scale=%.2f n=%d firing=%d shots=%d  in->out:",
+		get_pcvar_float(g_pSpreadScale), g_iSpreadN[id],
+		g_bFiringAngelic[id] ? 1 : 0, g_iShotsFired[id])
+
+	for (new i = 0; i < g_iSpreadN[id]; i++)
+	{
+		formatex(piece, charsmax(piece), " %.5f->%.5f", g_fSpreadIn[id][i], g_fSpreadOut[id][i])
+		add(line, charsmax(line), piece)
+	}
+
+	/*
+		log_amx, not client_print, and for the same reason FlushKickTrace above uses
+		it: this is already one line per burst, so it is one disk write per burst -
+		the cost that mattered in the 08-15 handoff was a write per SHOT. Sending it
+		to the player's console instead put it somewhere it could not be read back
+		later, which is the whole point of a trace.
+	*/
+	/*
+		Group size, measured. Largest distance between any impact and the first one -
+		a crude radius, but it is a number and it is in game units, which is all this
+		needed to stop being a matter of opinion.
+	*/
+	if (g_iImpactN[id] > 1)
+	{
+		new Float:worst = 0.0, Float:d[3], Float:len
+
+		for (new i = 1; i < g_iImpactN[id]; i++)
+		{
+			xs_vec_sub(g_fImpact[id][i], g_fImpact[id][0], d)
+			len = vector_length(d)
+
+			if (len > worst)
+				worst = len
+		}
+
+		formatex(piece, charsmax(piece), "  GROUP n=%d spread=%.2f units", g_iImpactN[id], worst)
+		add(line, charsmax(line), piece)
+	}
+	else
+	{
+		formatex(piece, charsmax(piece), "  GROUP n=%d (need 2+ impacts)", g_iImpactN[id])
+		add(line, charsmax(line), piece)
+	}
+
+	log_amx("%s", line)
+	g_iSpreadN[id] = 0
+	g_iImpactN[id] = 0
+}
+
 public Fw_FireBullets3_Pre(pEntity, Float:vecSrc[3], Float:vecDirShooting[3], Float:vecSpread, Float:flDistance,
                            iPenetration, iBulletType, iDamage, Float:flRangeModifier, pevAttacker, bool:bPistol, shared_rand)
 {
+	/*
+		Traced BEFORE the guards, on purpose.
+
+		"1.0 and 0.5 look the same" has three different causes and this is the only
+		way to tell them apart: the hook never fires at all, or it fires but pEntity
+		is not the player index this assumes, or it fires with the right index while
+		g_bFiringAngelic is false so the write is skipped. Printing after the guards
+		would only ever show the case that already works.
+
+		Buffered into one console line per burst rather than logged per bullet -
+		log_amx on the firing path is what put this server's frame rate on the floor
+		in the 08-15 handoff.
+	*/
+	if (get_pcvar_num(g_pDebugSpread))
+	{
+		new owner = (pEntity >= 1 && pEntity <= g_iMaxPlayers) ? pEntity : 0
+
+		if (owner && g_iSpreadN[owner] < SPREAD_TRACE_MAX)
+		{
+			g_fSpreadIn[owner][g_iSpreadN[owner]] = vecSpread
+
+			/*
+				Sentinel, because 0.0 is ambiguous.
+
+				out is written only after SetHookChainArg. At scale 0 the value
+				written is also 0.0, which is what an untouched array slot already
+				holds - so the first run could not tell "we wrote zero" from "we
+				never got past the guard". -1 can only come from here.
+			*/
+			g_fSpreadOut[owner][g_iSpreadN[owner]] = -1.0
+
+			g_iSpreadN[owner]++
+		}
+		else if (!owner)
+		{
+			// pEntity is not a player slot - print immediately, there is no burst
+			// to attach it to and this is the answer on its own
+			log_amx("[ANGELIC/SPREAD] pEntity=%d is NOT a player slot (max=%d) - the guard can never pass", pEntity, g_iMaxPlayers)
+		}
+	}
+
 	if (pEntity < 1 || pEntity > g_iMaxPlayers || !g_bFiringAngelic[pEntity])
 		return HC_CONTINUE
 
@@ -1494,7 +1652,51 @@ public Fw_FireBullets3_Pre(pEntity, Float:vecSrc[3], Float:vecDirShooting[3], Fl
 	if (scale == 1.0)
 		return HC_CONTINUE
 
+	/*
+		reapi has SetHookChainArg but no getter, so the write cannot be read back
+		from in here to confirm it landed. What the trace records is what we ASKED
+		for, not what the engine then used - the distinction matters, and the only
+		way to close it is behavioural: see the note on the flush.
+	*/
+
+	/*
+		Argument probe. TEMPORARY - zp_angelic_debug_argidx 0 disables it entirely
+		and the line below is the real behaviour.
+
+		The trace proved this hook fires, that pEntity is a player index, that the
+		guard passes and that SetHookChainArg is called on every bullet - and the
+		group still does not change. So either arg 4 is not vecSpread (reapi may
+		number arguments without counting pEntity, which would make 4 the distance)
+		or ReGameDLL has already consumed the cone by the time a pre-hook runs.
+
+		Writing a chosen value into a chosen index settles which. The useful probes
+		are the ones with unmistakable effects rather than a group to eyeball:
+
+		    iDamage    (8 counting pEntity, 7 without)  set it low and zombies stop
+		                                                dying - impossible to miss
+		    flDistance (5 counting pEntity, 4 without)  set it to 0 and bullets
+		                                                reach nothing
+
+		Type matters: iPenetration, iBulletType and iDamage are integers, and
+		pushing a float into one of those slots would corrupt it rather than
+		reading as a small number.
+	*/
+	new probe = get_pcvar_num(g_pDebugArgIdx)
+
+	if (probe > 0)
+	{
+		if (get_pcvar_num(g_pDebugArgType))
+			SetHookChainArg(probe, ATYPE_INTEGER, get_pcvar_num(g_pDebugArgVal))
+		else
+			SetHookChainArg(probe, ATYPE_FLOAT, get_pcvar_float(g_pDebugArgVal))
+
+		return HC_CONTINUE
+	}
+
 	SetHookChainArg(4, ATYPE_FLOAT, vecSpread * scale)
+
+	if (get_pcvar_num(g_pDebugSpread) && g_iSpreadN[pEntity] > 0 && g_iSpreadN[pEntity] <= SPREAD_TRACE_MAX)
+		g_fSpreadOut[pEntity][g_iSpreadN[pEntity] - 1] = vecSpread * scale
 
 	return HC_CONTINUE
 }
@@ -1521,6 +1723,23 @@ public Fw_TraceAttack(iEnt, iAttacker, Float:flDamage, Float:fDir[3], ptr, iDama
 
 	static Float:end[3]
 	get_tr2(ptr, TR_vecEndPos, end)
+
+	/*
+		Record where the round actually landed.
+
+		This is the measurement the whole spread question needed and never had. The
+		cone value in the trace is what the engine was HANDED; these are the points
+		the bullets reached, so the group size comes out as a number in units instead
+		of an impression of a wall. "Looks tight" cannot be checked; 0.4 units against
+		38 units can.
+	*/
+	if (get_pcvar_num(g_pDebugSpread) && g_iImpactN[iAttacker] < SPREAD_TRACE_MAX)
+	{
+		g_fImpact[iAttacker][g_iImpactN[iAttacker]][0] = end[0]
+		g_fImpact[iAttacker][g_iImpactN[iAttacker]][1] = end[1]
+		g_fImpact[iAttacker][g_iImpactN[iAttacker]][2] = end[2]
+		g_iImpactN[iAttacker]++
+	}
 
 	message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
 	write_byte(TE_GUNSHOTDECAL)
